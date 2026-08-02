@@ -1,4 +1,5 @@
 import { createEnterpriseLabelCatalog, type EnterpriseCatalogLocale } from "@easy-enterprise/ui/enterprise";
+import { localAccountsLabels } from "./local-accounts-labels";
 
 export type Locale = EnterpriseCatalogLocale;
 
@@ -13,6 +14,11 @@ export function messages(locale: Locale) {
   const shared = createEnterpriseLabelCatalog(locale, brand);
   return {
     ...shared,
+    navigation: {
+      ...shared.navigation,
+      accounts: locale === "en" ? "Local accounts" : "本地账户",
+    },
+    localAccounts: localAccountsLabels(locale),
     brand: brand.appName,
     subtitle: brand.appDescription,
     dashboardTitle: locale === "en" ? "Workbench" : "工作台",

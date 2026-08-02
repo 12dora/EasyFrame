@@ -42,11 +42,13 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
   const model: NavModel = useMemo(() => {
     const permissions = identity?.permissions ?? new Set<string>();
     const canAccess = permissions.has("identity.integration.view") || permissions.has("authz.integration.view");
+    const canAccounts = permissions.has("accounts.local.view");
     const canUpstream = permissions.has("ops.upstream_health.view");
     const canFooter = permissions.has("settings.app_setting.update");
     const settingsItems = [
       ...(canSecurity ? [{ key: "security", label: t.navigation.security, href: href("/app/settings/security"), active: activePrefix("/app/settings/security") }] : []),
       ...(canAccess ? [{ key: "access", label: t.navigation.access, href: href("/app/settings/access"), active: activePrefix("/app/settings/access") }] : []),
+      ...(canAccounts ? [{ key: "accounts", label: t.navigation.accounts, href: href("/app/settings/accounts"), active: activePrefix("/app/settings/accounts") }] : []),
       ...(canUpstream ? [{ key: "upstream", label: t.navigation.upstream, href: href("/app/settings/upstream"), active: activePrefix("/app/settings/upstream") }] : []),
       ...(canFooter ? [{ key: "footer", label: t.navigation.footer, href: href("/app/settings/footer"), active: activePrefix("/app/settings/footer") }] : []),
     ];
