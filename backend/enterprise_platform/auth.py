@@ -1,5 +1,6 @@
 """共享本地账户登录与二次验证编排。"""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,10 +31,25 @@ def is_credential_failure(error: AuthError) -> bool:
     return error.status_code == 401
 
 
-def authenticate_login(port: AccountPort, username: str, password: str, totp_code: str | None) -> tuple[str, bool]:
+def authenticate_login(
+    port: AccountPort,
+    username: str,
+    password: str,
+    totp_code: str | None,
+    *,
+    before_second_factor: Callable[[str], None] | None = None,
+) -> tuple[str, bool]:
+    """密码 + 可选 TOTP 登录。
+
+    before_second_factor: 密码通过、进入二次验证之前以 account.id 回调一次,
+    宿主用它挂按账号的二次验证限流(防 TOTP 爆破);None 时行为与旧签名完全一致。
+    """
+
     account = require_password(port, username, password)
     methods = second_factor_methods(account)
     if methods:
+        if before_second_factor is not None:
+            before_second_factor(account.id)
         if not totp_code or "totp" not in methods:
             raise AuthError(401, {"code": REQUIRE_SECOND_FACTOR_CODE, "methods": methods})
         if not port.verify_totp(account.id, totp_code):

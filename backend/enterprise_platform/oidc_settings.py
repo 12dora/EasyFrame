@@ -73,6 +73,32 @@ def normalize_scopes(value: str) -> str:
     return " ".join(value.split())
 
 
+def derive_authentik_endpoints(issuer: str) -> dict[str, str]:
+    """从语法合法的 Authentik OIDC issuer 派生三个端点。
+
+    运行时配置与集成管理视图共用这一规则:issuer 本身不合法时直接 ValueError,
+    避免仅凭显式端点字段填了值就把配置报告成可用。
+    """
+
+    normalized = normalize_issuer(issuer)
+    try:
+        parsed = urlsplit(normalized)
+    except ValueError as exc:
+        raise ValueError("OIDC issuer 无效") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("OIDC issuer 无效")
+    parts = [part for part in parsed.path.split("/") if part]
+    slug = parts[-1] if parts else ""
+    if not slug:
+        raise ValueError("OIDC issuer 缺少 application slug")
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    return {
+        "authorization_endpoint": f"{base}/application/o/authorize/",
+        "token_endpoint": f"{base}/application/o/token/",
+        "jwks_uri": f"{base}/application/o/{slug}/jwks/",
+    }
+
+
 def rewrite_for_server_side(server_base_url: str, url: str) -> str:
     """以显式 serverBaseUrl 改写后端出站 URL 的 authority，保留路径与查询。"""
 
@@ -100,6 +126,7 @@ def _read(value: OidcSettingsUpdate | Mapping[str, Any], field: str) -> str:
 
 __all__ = [
     "OidcClientAuthority",
+    "derive_authentik_endpoints",
     "normalize_base_url",
     "normalize_endpoint",
     "normalize_issuer",

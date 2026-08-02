@@ -168,6 +168,8 @@ class PlatformSecurityHooks:
 @dataclass(frozen=True)
 class PlatformRouteGroups:
     auth: bool = True
+    # None(缺省)= 跟随 auth,保持旧语义;宿主自有登录但复用框架登出时显式传 True。
+    logout: bool | None = None
     me: bool = True
     password: bool = True
     totp: bool = True
@@ -607,6 +609,8 @@ def _apply_route_groups(router: APIRouter, groups: PlatformRouteGroups, *, inclu
             return groups.passkeys
         if path == "/auth/me":
             return groups.me
+        if path == "/auth/logout":
+            return groups.auth if groups.logout is None else groups.logout
         if path == "/users/me/password":
             return groups.password
         if path.startswith("/users/me/totp"):
