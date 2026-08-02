@@ -1,0 +1,12 @@
+.next
+apps/*/.next
+.env
+.env.*
+.pnpm-store
+node_modules
+apps/*/node_modules
+packages/*/node_modules
+test-results
+playwright-report
+*.tsbuildinfo
+.DS_Store
