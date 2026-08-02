@@ -23,6 +23,7 @@ class Account(BlankBase):
     external_user_id: Mapped[str | None] = mapped_column(String(128))
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    local_permissions: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     ui_locale: Mapped[str] = mapped_column(String(10), default="zh-CN", server_default="zh-CN")
     totp_secret: Mapped[str | None] = mapped_column(String(100))

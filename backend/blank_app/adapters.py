@@ -16,7 +16,7 @@ import pyotp
 from fastapi.encoders import jsonable_encoder
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import and_, delete, or_, update
+from sqlalchemy import and_, delete, func, or_, update
 from sqlalchemy.exc import IntegrityError
 
 from blank_app.database import SessionLocal
@@ -44,6 +44,17 @@ from enterprise_platform.authz import (
 from enterprise_platform.footer import sanitize_footer_html
 from enterprise_platform.health import safe_health_summary
 from enterprise_platform.jwks import probe_jwks
+from enterprise_platform.local_accounts import (
+    BASELINE_SELF_SERVICE,
+    CreateLocalAccountRequest,
+    LocalAccountAdminPort,
+    LocalAccountDetail,
+    LocalAccountPermissionCatalogItem,
+    LocalAccountSummary,
+    ResetLocalAccountPasswordRequest,
+    SetLocalAccountPermissionsRequest,
+    UpdateLocalAccountRequest,
+)
 from enterprise_platform.oidc_settings import (
     normalize_base_url,
     normalize_oidc_settings,
@@ -93,6 +104,8 @@ ALL_PERMISSIONS = {
     "auth.totp.advance",
     "auth.passkey.view",
     "auth.passkey.create",
+    "accounts.local.view",
+    "accounts.local.manage",
     "settings.app_setting.update",
     "identity.integration.view",
     "identity.integration.manage",
@@ -116,11 +129,7 @@ SECURITY_OPERATION_CAPABILITIES: dict[str, str] = {
     "passkey_delete": "passkey_delete",
 }
 
-PUBLIC_SECRET_MARKERS = (
-    "replace-with-",
-    "change-before-deploy",
-    "changeme",
-)
+PUBLIC_SECRET_MARKERS = ("replace-with-", "change-before-deploy", "changeme")
 
 
 def is_unsafe_bootstrap_secret(value: str, *, min_length: int) -> bool:
@@ -274,16 +283,11 @@ def local_auth_mode() -> str:
 def security_capabilities(account: Account) -> SecurityCapabilities:
     """本地安全操作能力的唯一事实源:`/auth/me` 声明与后端放行都只读它。
 
-    只有「启用本地认证 + 拥有本地口令 + 非外部身份」的账号可以管理本地凭据;
-    生产运行时进一步收敛到本地超管(break-glass)。
+    只有「启用本地认证 + 拥有本地口令 + 非外部身份」的账号可以管理本地凭据。
+    本地非管理员也拥有合同约定的自助安全能力。
     """
 
-    allowed = bool(
-        account.password_hash
-        and not account.external_source
-        and local_auth_mode() != "disabled"
-        and (os.getenv("BLANK_RUNTIME_ENV", "production").strip().lower() != "production" or account.is_admin)
-    )
+    allowed = bool(account.password_hash and not account.external_source and local_auth_mode() != "disabled")
     return SecurityCapabilities(
         password_change=allowed,
         totp_status=allowed,
@@ -342,7 +346,12 @@ class BlankAccountAdapter:
             return None
         with SessionLocal() as db:
             account = db.query(Account).filter(Account.username == username).one_or_none()
-            if account is None or not account.password_hash or not pwd_context.verify(password, account.password_hash):
+            if (
+                account is None
+                or not account.active
+                or not account.password_hash
+                or not pwd_context.verify(password, account.password_hash)
+            ):
                 pwd_context.verify(password, TIMING_EQUALIZER_HASH)
                 return None
             has_passkey = db.query(Passkey.id).filter(Passkey.account_id == account.id).first() is not None
@@ -408,11 +417,12 @@ class BlankAccountAdapter:
 
     def current_user(self) -> CurrentUser:
         account, _ = self._authenticated_account()
-        permissions = (
-            ALL_PERMISSIONS
-            if account.is_admin and not account.external_source and local_auth_mode() != "disabled"
-            else _snapshot_permissions(account)
-        )
+        if account.is_admin and not account.external_source and local_auth_mode() != "disabled":
+            permissions = ALL_PERMISSIONS
+        elif not account.external_source:
+            permissions = _local_permissions(account)
+        else:
+            permissions = _snapshot_permissions(account)
         return CurrentUser(
             id=str(account.id),
             name=account.username,
@@ -645,6 +655,197 @@ class BlankAccountAdapter:
                 account.sessions_revoked_at = datetime.now(UTC)
             db.commit()
             return True
+
+
+class BlankLocalAccountAdmin(LocalAccountAdminPort):
+    def list(self, *, search: str | None) -> tuple[list[LocalAccountSummary], int]:
+        with SessionLocal() as db:
+            passkey_counts = (
+                db.query(Passkey.account_id, func.count(Passkey.id)).group_by(Passkey.account_id).subquery()
+            )
+            query = (
+                db.query(Account, func.coalesce(passkey_counts.c.count, 0))
+                .outerjoin(passkey_counts, passkey_counts.c.account_id == Account.id)
+                .filter(Account.external_source.is_(None))
+            )
+            if search and search.strip():
+                term = f"%{search.strip()}%"
+                query = query.filter(or_(Account.username.ilike(term), Account.email.ilike(term)))
+            rows = query.order_by(Account.created_at.asc(), Account.username.asc()).all()
+            return [
+                _local_account_summary(account, passkey_count=int(passkey_count or 0))
+                for account, passkey_count in rows
+            ], len(rows)
+
+    def permission_catalog(self) -> list[LocalAccountPermissionCatalogItem]:
+        with SessionLocal() as db:
+            rows = (
+                db.query(PermissionCatalog)
+                .filter(PermissionCatalog.active.is_(True))
+                .order_by(PermissionCatalog.code.asc())
+                .all()
+            )
+            return [LocalAccountPermissionCatalogItem.model_validate(row) for row in rows]
+
+    def create(self, payload: CreateLocalAccountRequest, *, actor_id: str) -> LocalAccountDetail:
+        permissions = _validate_grant_codes(payload.permissions)
+        username = payload.username.strip()
+        if not username:
+            raise AuthError(422, "用户名不能为空")
+        if payload.is_admin and permissions:
+            raise AuthError(422, "管理员账户不能写入本地权限")
+        with SessionLocal() as db:
+            account = Account(
+                username=username,
+                email=_normalized_email(payload.email),
+                password_hash=pwd_context.hash(payload.password),
+                active=True,
+                is_admin=payload.is_admin,
+                local_permissions=[] if payload.is_admin else permissions,
+                must_change_password=payload.must_change_password,
+            )
+            db.add(account)
+            try:
+                db.commit()
+            except IntegrityError as exc:
+                db.rollback()
+                raise AuthError(409, "用户名已存在") from exc
+            db.refresh(account)
+            detail = _local_account_detail(db, account)
+        record_platform_audit(
+            actor_id,
+            "accounts.local.create",
+            None,
+            {
+                "targetAccountId": str(detail.id),
+                "changedKeys": ["username", "email", "password", "mustChangePassword", "isAdmin", "permissions"],
+            },
+        )
+        return detail
+
+    def get(self, account_id: uuid.UUID) -> LocalAccountDetail:
+        with SessionLocal() as db:
+            account = _get_local_account_or_404(db, account_id)
+            return _local_account_detail(db, account)
+
+    def update(self, account_id: uuid.UUID, payload: UpdateLocalAccountRequest, *, actor_id: str) -> LocalAccountDetail:
+        with SessionLocal() as db:
+            account = _get_local_account_or_404(db, account_id)
+            changed_keys: list[str] = []
+            before = _guarded_account_audit_state(account)
+            if "email" in payload.model_fields_set and _normalized_email(payload.email) != account.email:
+                account.email = _normalized_email(payload.email)
+                changed_keys.append("email")
+            if payload.ui_locale is not None and payload.ui_locale != account.ui_locale:
+                account.ui_locale = payload.ui_locale
+                changed_keys.append("uiLocale")
+            if payload.active is not None and payload.active != account.active:
+                _guard_local_account_activation_change(db, actor_id=actor_id, account=account, active=payload.active)
+                account.active = payload.active
+                changed_keys.append("active")
+            if payload.is_admin is not None and payload.is_admin != account.is_admin:
+                _guard_local_account_admin_change(db, actor_id=actor_id, account=account, is_admin=payload.is_admin)
+                account.is_admin = payload.is_admin
+                if payload.is_admin:
+                    account.local_permissions = []
+                changed_keys.append("isAdmin")
+            db.commit()
+            db.refresh(account)
+            detail = _local_account_detail(db, account)
+        record_platform_audit(
+            actor_id,
+            "accounts.local.update",
+            before,
+            {"targetAccountId": str(detail.id), "changedKeys": changed_keys},
+        )
+        return detail
+
+    def delete(self, account_id: uuid.UUID, *, actor_id: str) -> None:
+        with SessionLocal() as db:
+            account = _get_local_account_or_404(db, account_id)
+            _guard_local_account_delete(db, actor_id=actor_id, account=account)
+            before = _guarded_account_audit_state(account)
+            db.query(Passkey).filter(Passkey.account_id == account.id).delete()
+            db.query(Notification).filter(Notification.account_id == account.id).delete()
+            db.query(PermissionSnapshot).filter(PermissionSnapshot.account_id == account.id).delete()
+            db.delete(account)
+            db.commit()
+        record_platform_audit(
+            actor_id,
+            "accounts.local.delete",
+            before,
+            {"targetAccountId": str(account_id), "changedKeys": ["deleted"]},
+        )
+
+    def reset_password(
+        self, account_id: uuid.UUID, payload: ResetLocalAccountPasswordRequest, *, actor_id: str
+    ) -> LocalAccountDetail:
+        _validate_password_policy(payload.password)
+        with SessionLocal() as db:
+            account = _get_local_account_or_404(db, account_id)
+            account.password_hash = pwd_context.hash(payload.password)
+            account.must_change_password = payload.must_change_password
+            account.sessions_revoked_at = datetime.now(UTC)
+            db.commit()
+            db.refresh(account)
+            detail = _local_account_detail(db, account)
+        record_platform_audit(
+            actor_id,
+            "accounts.local.password.reset",
+            {"targetAccountId": str(account_id)},
+            {
+                "targetAccountId": str(detail.id),
+                "changedKeys": ["password", "mustChangePassword", "sessionsRevokedAt"],
+            },
+        )
+        return detail
+
+    def set_permissions(
+        self, account_id: uuid.UUID, payload: SetLocalAccountPermissionsRequest, *, actor_id: str
+    ) -> LocalAccountDetail:
+        permissions = _validate_grant_codes(payload.permissions)
+        with SessionLocal() as db:
+            account = _get_local_account_or_404(db, account_id)
+            if account.is_admin:
+                raise AuthError(422, "管理员账户不能写入本地权限")
+            before = {"targetAccountId": str(account.id), "permissions": list(account.local_permissions or [])}
+            account.local_permissions = permissions
+            db.commit()
+            db.refresh(account)
+            detail = _local_account_detail(db, account)
+        record_platform_audit(
+            actor_id,
+            "accounts.local.permissions.set",
+            before,
+            {"targetAccountId": str(detail.id), "changedKeys": ["permissions"]},
+        )
+        return detail
+
+    def disable_totp(self, account_id: uuid.UUID, *, actor_id: str) -> LocalAccountDetail:
+        with SessionLocal() as db:
+            account = _get_local_account_or_404(db, account_id)
+            before_enabled = account.totp_enabled
+            had_totp_configuration = bool(account.totp_enabled or account.totp_secret or account.totp_pending_secret)
+            account.totp_enabled = False
+            account.totp_secret = None
+            account.totp_pending_secret = None
+            account.sessions_revoked_at = datetime.now(UTC)
+            db.commit()
+            db.refresh(account)
+            detail = _local_account_detail(db, account)
+        record_platform_audit(
+            actor_id,
+            "accounts.local.totp.disable",
+            {"targetAccountId": str(account_id), "totpEnabled": before_enabled},
+            {
+                "targetAccountId": str(detail.id),
+                "changedKeys": [
+                    *(["totpConfiguration"] if had_totp_configuration else []),
+                    "sessionsRevokedAt",
+                ],
+            },
+        )
+        return detail
 
 
 class BlankFooterAdapter:
@@ -1048,6 +1249,7 @@ def _health_summary_code(status: str, summary: str) -> str:
 
 
 account_adapter = BlankAccountAdapter()
+local_account_admin = BlankLocalAccountAdmin()
 
 
 def require_permission(code: str) -> None:
@@ -1085,6 +1287,131 @@ def _snapshot_permissions(account: Account) -> set[str]:
             for row in db.query(PermissionCatalog).all()
         }
         return {grant.permission_code for grant in normalize_grants(snapshot.grants, catalog)}
+
+
+def _local_permissions(account: Account) -> set[str]:
+    with SessionLocal() as db:
+        active_codes = {
+            code for (code,) in db.query(PermissionCatalog.code).filter(PermissionCatalog.active.is_(True)).all()
+        }
+    stored = {code for code in (account.local_permissions or []) if isinstance(code, str)}
+    return set(BASELINE_SELF_SERVICE) | (stored & active_codes)
+
+
+def _normalized_email(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _validate_password_policy(password: str) -> str:
+    return ResetLocalAccountPasswordRequest.model_validate({"password": password}).password
+
+
+def _validate_grant_codes(codes: list[str]) -> list[str]:
+    normalized = list(dict.fromkeys(codes))
+    with SessionLocal() as db:
+        active_codes = {
+            row.code for row in db.query(PermissionCatalog.code).filter(PermissionCatalog.active.is_(True)).all()
+        }
+    unknown = sorted(code for code in normalized if code not in active_codes)
+    if unknown:
+        raise AuthError(422, f"未知权限代码: {', '.join(unknown)}")
+    return [code for code in normalized if code not in BASELINE_SELF_SERVICE]
+
+
+def _get_local_account_or_404(db, account_id: uuid.UUID) -> Account:
+    account = db.get(Account, account_id)
+    if account is None or account.external_source is not None:
+        raise AuthError(404, "本地账户不存在")
+    return account
+
+
+def _count_local_admins(db, *, exclude_account_id: uuid.UUID | None = None) -> int:
+    active_admin_ids = (
+        db.query(Account.id)
+        .filter(
+            Account.external_source.is_(None),
+            Account.active.is_(True),
+            Account.is_admin.is_(True),
+        )
+        .order_by(Account.id)
+        .with_for_update()
+        .all()
+    )
+    return sum(account_id != exclude_account_id for (account_id,) in active_admin_ids)
+
+
+def _guard_local_account_activation_change(db, *, actor_id: str, account: Account, active: bool) -> None:
+    if str(account.id) == actor_id and not active:
+        raise AuthError(403, "不能停用自己的账户")
+    if (
+        account.is_admin
+        and account.active
+        and not active
+        and _count_local_admins(db, exclude_account_id=account.id) == 0
+    ):
+        raise AuthError(422, "不能停用最后一个活跃的本地管理员")
+
+
+def _guard_local_account_admin_change(db, *, actor_id: str, account: Account, is_admin: bool) -> None:
+    if str(account.id) == actor_id and not is_admin:
+        raise AuthError(403, "不能撤销自己的管理员权限")
+    if (
+        account.is_admin
+        and account.active
+        and not is_admin
+        and _count_local_admins(db, exclude_account_id=account.id) == 0
+    ):
+        raise AuthError(422, "不能降级最后一个活跃的本地管理员")
+
+
+def _guard_local_account_delete(db, *, actor_id: str, account: Account) -> None:
+    if str(account.id) == actor_id:
+        raise AuthError(403, "不能删除自己的账户")
+    if account.is_admin and account.active and _count_local_admins(db, exclude_account_id=account.id) == 0:
+        raise AuthError(422, "不能删除最后一个活跃的本地管理员")
+
+
+def _guarded_account_audit_state(account: Account) -> dict[str, Any]:
+    return {
+        "targetAccountId": str(account.id),
+        "username": account.username,
+        "email": account.email,
+        "active": account.active,
+        "isAdmin": account.is_admin,
+        "uiLocale": account.ui_locale,
+        "permissions": list(account.local_permissions or []),
+        "mustChangePassword": account.must_change_password,
+        "totpEnabled": account.totp_enabled,
+    }
+
+
+def _local_account_summary(account: Account, *, passkey_count: int) -> LocalAccountSummary:
+    return LocalAccountSummary(
+        id=account.id,
+        username=account.username,
+        email=account.email,
+        active=account.active,
+        is_admin=account.is_admin,
+        totp_enabled=account.totp_enabled,
+        passkey_count=passkey_count,
+        must_change_password=account.must_change_password,
+        permission_count=len(account.local_permissions or []),
+        created_at=account.created_at,
+    )
+
+
+def _local_account_detail(db, account: Account) -> LocalAccountDetail:
+    passkey_count = int(db.query(func.count(Passkey.id)).filter(Passkey.account_id == account.id).scalar() or 0)
+    summary = _local_account_summary(account, passkey_count=passkey_count)
+    return LocalAccountDetail(
+        **summary.model_dump(),
+        ui_locale=account.ui_locale,
+        permissions=list(account.local_permissions or []),
+        baseline_permissions=sorted(BASELINE_SELF_SERVICE),
+    )
 
 
 def _snapshot_role_groups(account: Account) -> list[str]:

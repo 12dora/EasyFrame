@@ -97,7 +97,7 @@ class EasyAuthPermissionSnapshot(BaseModel):
     def isolate_malformed_grants(cls, value: Any) -> tuple[EasyAuthGrantItem, ...]:
         """上游单条坏 grant 不得使整个 snapshot 失效。"""
 
-        if not isinstance(value, (list, tuple)):
+        if not isinstance(value, list | tuple):
             raise ValueError("grants must be a list")
         return parse_grants_isolated(value)
 

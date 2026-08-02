@@ -107,6 +107,8 @@ FRAMEWORK_PERMISSIONS = (
             risk_level="high" if code.endswith("manage") or code.endswith("update") else "standard",
         )
         for code in (
+            "accounts.local.view",
+            "accounts.local.manage",
             "settings.app_setting.update",
             "identity.integration.view",
             "identity.integration.manage",
@@ -232,6 +234,8 @@ def seed_platform_catalog() -> None:
         "auth.totp.advance": ("管理两步认证", "Manage two-factor authentication"),
         "auth.passkey.view": ("查看通行密钥", "View passkeys"),
         "auth.passkey.create": ("管理通行密钥", "Manage passkeys"),
+        "accounts.local.view": ("查看本地账户", "View local accounts"),
+        "accounts.local.manage": ("管理本地账户", "Manage local accounts"),
     }
     with SessionLocal() as db:
         registered_codes = {permission.code for permission in FRAMEWORK_PERMISSIONS}

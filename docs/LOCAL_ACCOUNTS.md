@@ -34,8 +34,9 @@ Gating: list/detail need `accounts.local.view`; mutations need `accounts.local.m
 | PATCH | `/local-accounts/{id}` | `{email?, active?, isAdmin?, uiLocale?}` | Guards: cannot deactivate or demote yourself; cannot deactivate/demote the **last active local admin**. |
 | DELETE | `/local-accounts/{id}` | — | Guards: not self, not last active local admin. Deletes dependent passkeys/notifications rows. |
 | POST | `/local-accounts/{id}/password` | `{password, mustChangePassword?=true}` | Admin reset; revokes sessions (`sessions_revoked_at`). |
-| PUT | `/local-accounts/{id}/permissions` | `{permissions: [codes]}` | Codes must be ⊆ active catalog codes, else 422. 422 for admin accounts (they hold ALL; storing grants would mislead). |
+| PUT | `/local-accounts/{id}/permissions` | `{permissions: [codes]}` | Codes must be ⊆ active catalog codes, else 422. 422 for admin accounts (they hold ALL; storing grants would mislead). `BASELINE_SELF_SERVICE` codes are **stripped before persistence** (implicit-only invariant — never stored as explicit grants); the same stripping applies to `permissions` on create. The picker shows baseline codes as locked/implied, not as selectable grants. |
 | DELETE | `/local-accounts/{id}/totp` | — | Admin rescue for lost 2FA: disables TOTP + clears secrets. |
+| GET | `/local-accounts/permission-catalog` | — | Grantable catalog for the permission picker, gated on `accounts.local.view` (so delegated managers don't need `authz.integration.*`). Full shape: `{data: [{code, domain, resource, riskLevel, active}]}`, active codes only. |
 
 `LocalAccountSummary`: `id, username, email, active, isAdmin, totpEnabled, passkeyCount,
 mustChangePassword, permissionCount, createdAt`. Detail adds `uiLocale, permissions,
@@ -66,7 +67,7 @@ forced-change flow and TOTP second factor apply as today.
   (antd Form: username/email/password with 随机生成 button + copy, mustChangePassword switch,
   isAdmin switch, permission picker); edit drawer (profile + activate/deactivate + delete confirm +
   password reset + TOTP rescue + permission editor). Permission picker groups catalog codes by
-  domain (data from `GET /api/v1/authz-integration/permission-catalog` via adapter) — the same
+  domain (data from `GET /api/v1/local-accounts/permission-catalog` via adapter) — the same
   registry EasyAuth sees.
 - Self-service password change & 2FA UIs already exist (`settings/security`) and apply to all local
   accounts unchanged.

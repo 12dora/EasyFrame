@@ -13,6 +13,7 @@ from blank_app.adapters import (
     BlankUpstreamHealthAdapter,
     account_adapter,
     authorize_security_operation,
+    local_account_admin,
     record_platform_audit,
     request_principal_account_id,
     request_token,
@@ -32,6 +33,7 @@ from blank_app.oidc_adapter import BlankOidcHost
 from enterprise_platform import PlatformPorts, PlatformSecurityHooks, create_platform_router
 from enterprise_platform.auth import AuthError
 from enterprise_platform.authz import PrincipalValidationError
+from enterprise_platform.local_accounts import create_local_account_admin_router
 from enterprise_platform.oidc import create_oidc_router
 
 SECURITY_HEADERS = {
@@ -46,6 +48,7 @@ SENSITIVE_PATH_PREFIXES = (
     "/api/v1/identity-integration",
     "/api/v1/authz-integration",
     "/api/v1/notifications",
+    "/api/v1/local-accounts",
     "/.well-known/easyauth-app.json",
 )
 
@@ -110,10 +113,31 @@ security_hooks = PlatformSecurityHooks(
     ensure_local_auth_management_allowed=authorize_security_operation,
     after_event=record_platform_audit,
 )
+
+
+def _local_accounts_current_user():
+    return account_adapter.current_user()
+
+
+def _local_accounts_permission(code: str):
+    def dependency() -> None:
+        require_permission(code)
+
+    return dependency
+
+
 app.include_router(
     create_platform_router(ports, include_authz_integration=False, security_hooks=security_hooks), prefix="/api/v1"
 )
 app.include_router(authz_router, prefix="/api/v1")
+app.include_router(
+    create_local_account_admin_router(
+        local_account_admin,
+        current_user_dependency=_local_accounts_current_user,
+        permission_dependency_factory=_local_accounts_permission,
+    ),
+    prefix="/api/v1",
+)
 app.include_router(descriptor_router)
 app.include_router(create_oidc_router(BlankOidcHost()), prefix="/api/v1")
 

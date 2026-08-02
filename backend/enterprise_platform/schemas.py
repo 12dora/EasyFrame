@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 from pydantic.alias_generators import to_camel
@@ -51,9 +51,12 @@ class LoginResponse(PlatformModel):
     must_change_password: bool = False
 
 
+PasswordValue = Annotated[str, Field(min_length=8, max_length=128)]
+
+
 class ChangePasswordRequest(StrictPlatformModel):
     current_password: str = Field(min_length=1)
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: PasswordValue
 
 
 class PasskeyLoginBeginRequest(StrictPlatformModel):
