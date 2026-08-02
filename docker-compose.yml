@@ -71,6 +71,9 @@ services:
       target: test
     environment:
       <<: *blank-backend-environment
+      # platform_tests 断言必须存在显式 Postgres URL(与离散 BLANK_POSTGRES_* 同值,
+      # database.py 中 URL 优先;run-backend-tests.sh 注入的隔离库路径同样满足断言)。
+      BLANK_DATABASE_URL: postgresql+psycopg://${BLANK_POSTGRES_USER:-enterprise}:${BLANK_POSTGRES_PASSWORD}@blank-postgres:5432/${BLANK_POSTGRES_DB:-enterprise_blank}
     command: ["python", "-m", "pytest", "-q", "platform_tests"]
     networks:
       - blank_internal
