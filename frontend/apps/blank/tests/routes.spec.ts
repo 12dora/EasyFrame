@@ -174,7 +174,9 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     for (const path of ["manifest", "descriptor-keys"]) await page.route(`**/api/v1/authz-integration/${path}**`, (route) => { manageOnlyReads += 1; return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ detail: "Forbidden" }) }); });
     await page.goto(`/${locale}/app/settings/access`);
     await expect(page.locator('[data-test-id="authz-integration-status-card"]')).toBeVisible();
-    await expect(page.locator('[data-test-id="authz-permission-catalog"]')).toBeVisible();
+    // restrictedViewer(无 manage 权限)只看到状态卡:目录/我的授权/密钥全部收敛,
+    // 这是审计后的收敛面裁决;本用例的核心断言是绝不发 manage-only 请求。
+    await expect(page.locator('[data-test-id="authz-permission-catalog"]')).toHaveCount(0);
     expect(manageOnlyReads).toBe(0);
   });
   test("settings drill-down can return and nested routes keep the active leaf", async ({ page }) => {
