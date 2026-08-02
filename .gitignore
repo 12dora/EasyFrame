@@ -1,0 +1,10 @@
+node_modules/
+__pycache__/
+.next/
+.env.blank
+.DS_Store
+*.tsbuildinfo
+test-results/
+playwright-report/
+.pytest_cache/
+.ruff_cache/

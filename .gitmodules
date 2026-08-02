@@ -1,0 +1,3 @@
+[submodule "frontend/packages/easy-enterprise"]
+	path = frontend/packages/easy-enterprise
+	url = https://github.com/12dora/EasyUI.git

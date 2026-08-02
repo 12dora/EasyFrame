@@ -1,0 +1,18 @@
+# EasyFrame backend 工具配置(运行时依赖以 requirements.blank*.txt 为权威锁)。
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI 要求 Depends()/Query() 做默认值, B008 不适用
+"enterprise_platform/*.py" = ["B008"]
+"blank_app/*.py" = ["B008"]
+# Alembic 迁移文件是生成的, 保持原有导入风格
+"blank_app/alembic/versions/*.py" = ["I001", "UP007", "UP035"]
+
+[tool.pytest.ini_options]
+testpaths = ["platform_tests"]
+asyncio_mode = "auto"

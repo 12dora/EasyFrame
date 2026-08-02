@@ -1,0 +1,12 @@
+{
+  "name": "easyframe-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "blank:dev": "pnpm --dir apps/blank dev",
+    "blank:build": "pnpm --dir apps/blank build",
+    "blank:start": "pnpm --dir apps/blank start",
+    "blank:typecheck": "pnpm --dir apps/blank typecheck",
+    "blank:e2e": "pnpm --dir apps/blank e2e"
+  }
+}

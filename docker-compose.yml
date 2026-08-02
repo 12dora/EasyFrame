@@ -1,0 +1,108 @@
+name: easytrade-blank
+
+x-blank-backend-environment: &blank-backend-environment
+  BLANK_POSTGRES_PASSWORD: ${BLANK_POSTGRES_PASSWORD:?BLANK_POSTGRES_PASSWORD must be set}
+  BLANK_POSTGRES_USER: ${BLANK_POSTGRES_USER:-enterprise}
+  BLANK_POSTGRES_HOST: blank-postgres
+  BLANK_POSTGRES_PORT: "5432"
+  BLANK_POSTGRES_DB: ${BLANK_POSTGRES_DB:-enterprise_blank}
+  BLANK_RUNTIME_ENV: ${BLANK_RUNTIME_ENV:-production}
+  BLANK_LOCAL_AUTH_MODE: ${BLANK_LOCAL_AUTH_MODE:-disabled}
+  BLANK_JWT_SECRET: ${BLANK_JWT_SECRET:-}
+  BLANK_JWT_SECRET_PREVIOUS: ${BLANK_JWT_SECRET_PREVIOUS:-}
+  BLANK_ADMIN_USERNAME: ${BLANK_ADMIN_USERNAME:-admin}
+  BLANK_ADMIN_PASSWORD: ${BLANK_ADMIN_PASSWORD:-}
+  BLANK_ADMIN_EMAIL: ${BLANK_ADMIN_EMAIL:-}
+  BLANK_INTEGRATION_ENVELOPE_KEY: ${BLANK_INTEGRATION_ENVELOPE_KEY:-}
+  BLANK_PRINCIPAL_MODE: ${BLANK_PRINCIPAL_MODE:-disabled}
+  BLANK_PRINCIPAL_HEADER: ${BLANK_PRINCIPAL_HEADER:-X-Enterprise-Principal-JWT}
+  BLANK_PRINCIPAL_ISSUER: ${BLANK_PRINCIPAL_ISSUER:-}
+  BLANK_PRINCIPAL_AUDIENCE: ${BLANK_PRINCIPAL_AUDIENCE:-}
+  BLANK_PRINCIPAL_SECRET: ${BLANK_PRINCIPAL_SECRET:-}
+  BLANK_WEBAUTHN_RP_ID: ${BLANK_WEBAUTHN_RP_ID:-localhost}
+  BLANK_WEBAUTHN_RP_NAME: ${BLANK_WEBAUTHN_RP_NAME:-Enterprise Platform}
+  BLANK_WEBAUTHN_ORIGINS: ${BLANK_WEBAUTHN_ORIGINS:-http://localhost:3100}
+
+services:
+  blank-postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_USER: ${BLANK_POSTGRES_USER:-enterprise}
+      POSTGRES_PASSWORD: ${BLANK_POSTGRES_PASSWORD:?BLANK_POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${BLANK_POSTGRES_DB:-enterprise_blank}
+    restart: unless-stopped
+    volumes:
+      - blank_postgres_data:/var/lib/postgresql/data
+    networks:
+      - blank_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BLANK_POSTGRES_USER:-enterprise} -d ${BLANK_POSTGRES_DB:-enterprise_blank}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  blank-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    environment:
+      <<: *blank-backend-environment
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BLANK_BACKEND_PORT:-8100}:8000"
+    networks:
+      - blank_internal
+    depends_on:
+      blank-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  blank-backend-tests:
+    profiles: ["test"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: test
+    environment:
+      <<: *blank-backend-environment
+    command: ["python", "-m", "pytest", "-q", "platform_tests"]
+    networks:
+      - blank_internal
+    depends_on:
+      blank-postgres:
+        condition: service_healthy
+
+  blank-frontend:
+    build:
+      context: ./frontend
+      dockerfile: apps/blank/Dockerfile
+      args:
+        INTERNAL_BACKEND_ORIGIN: http://blank-backend:8000
+    environment:
+      INTERNAL_BACKEND_ORIGIN: http://blank-backend:8000
+    restart: unless-stopped
+    ports:
+      - "${BLANK_FRONTEND_PORT:-3100}:3000"
+    networks:
+      - blank_internal
+    depends_on:
+      blank-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(response => { if (!response.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  blank_postgres_data:
+
+networks:
+  blank_internal:
