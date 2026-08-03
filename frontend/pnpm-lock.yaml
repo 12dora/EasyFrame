@@ -14,8 +14,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/easy-enterprise
       antd:
-        specifier: ^6.5.2
-        version: 6.5.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        specifier: 6.5.2
+        version: 6.5.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       motion:
         specifier: ^12.38.0
         version: 12.43.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -76,8 +76,8 @@ importers:
         specifier: ^19
         version: 19.2.4(@types/react@19.2.18)
       antd:
-        specifier: ^6.5.2
-        version: 6.5.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        specifier: 6.5.2
+        version: 6.5.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       typescript:
         specifier: ^5
         version: 5.9.3
@@ -659,8 +659,8 @@ packages:
       react: '>=16.9.0'
       react-dom: '>=16.9.0'
 
-  '@rc-component/picker@1.12.0':
-    resolution: {integrity: sha512-0FZGgDiDZFMm2hcfGv4jyjm7yWIj2MiwfeTzLL0vWkO+8cCSKdiM9XhWpkn1aAsoI2EwUy48Oz2cGfvL8ZKrfw==}
+  '@rc-component/picker@1.11.0':
+    resolution: {integrity: sha512-6qXGKtoJvO8sUd17m5cyNEbEJub0zflCHnaZTBBmj63DPRZYc0WEHN8rp6hFSl+yMCJS/dJY5G+1fQ8bLCuD7A==}
     engines: {node: '>=12.x'}
     peerDependencies:
       date-fns: '>= 2.x'
@@ -1104,8 +1104,8 @@ packages:
     resolution: {integrity: sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg==}
     engines: {node: '>=8'}
 
-  antd@6.5.3:
-    resolution: {integrity: sha512-Q5r8sztf9Yk9B70bSUjnPYMCJ4A/eZM7uMoTj8UAhlSKR9aftjEuBEPcNSmRux7hB+87rxO8vN1X4HNjR97qyQ==}
+  antd@6.5.2:
+    resolution: {integrity: sha512-ntYx0lr4Jq192QnBkDWkDqEeoberXZ34vSE9SgiP/0J6DY8O0pzR3bVZLBsdpCSguVkwjtEAP+QNeMN7LNAvgw==}
     peerDependencies:
       react: '>=18.0.0'
       react-dom: '>=18.0.0'
@@ -2139,7 +2139,7 @@ snapshots:
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
 
-  '@rc-component/picker@1.12.0(dayjs@1.11.21)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@rc-component/picker@1.11.0(dayjs@1.11.21)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@rc-component/overflow': 1.0.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@rc-component/resize-observer': 1.1.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -2534,7 +2534,7 @@ snapshots:
     dependencies:
       color-convert: 2.0.1
 
-  antd@6.5.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4):
+  antd@6.5.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4):
     dependencies:
       '@ant-design/colors': 8.0.1
       '@ant-design/cssinjs': 2.1.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -2560,7 +2560,7 @@ snapshots:
       '@rc-component/mutate-observer': 2.0.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@rc-component/notification': 2.0.7(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@rc-component/pagination': 1.4.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@rc-component/picker': 1.12.0(dayjs@1.11.21)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@rc-component/picker': 1.11.0(dayjs@1.11.21)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@rc-component/progress': 1.0.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@rc-component/qrcode': 2.0.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@rc-component/rate': 1.0.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
