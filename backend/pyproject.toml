@@ -1,4 +1,19 @@
 # EasyFrame backend 工具配置(运行时依赖以 requirements.blank*.txt 为权威锁)。
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# 仅打包共享内核 enterprise_platform,供宿主 `pip install -e easyframe/backend`
+# 在宿主机 venv 内解析 import(镜像内仍走 Dockerfile COPY 原路径,不依赖本节)。
+# blank_app / platform_tests 是框架站宿主与契约测试,不作为包分发。
+[project]
+name = "easyframe-platform"
+version = "0.1.0"
+description = "EasyFrame 共享企业平台内核(enterprise_platform)"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+packages = ["enterprise_platform", "enterprise_platform.authz"]
 [tool.ruff]
 target-version = "py311"
 line-length = 120
