@@ -8,3 +8,6 @@ test-results/
 playwright-report/
 .pytest_cache/
 .ruff_cache/
+
+# 宿主 pip install -e backend 的本地构建产物
+backend/*.egg-info/
