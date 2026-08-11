@@ -116,7 +116,8 @@ class BoundedSlidingWindowCounter:
 _counter = BoundedSlidingWindowCounter()
 # 固定条带锁使同一账号的「检查额度 -> 认证 -> 记录失败」成为原子区间，
 # 同时避免按攻击者提供的 username 动态创建无界锁对象。
-_ACCOUNT_ADMISSION_LOCKS = tuple(threading.Lock() for _ in range(256))
+_LOGIN_ADMISSION_LOCKS = tuple(threading.Lock() for _ in range(256))
+_SECOND_FACTOR_ADMISSION_LOCKS = tuple(threading.Lock() for _ in range(256))
 
 
 def reset_rate_limits() -> None:
@@ -163,17 +164,23 @@ class _AccountFailureAdmission:
 
 
 def _failure_admission(bucket: str, identifier: str) -> _AccountFailureAdmission:
-    """按「桶 + 归一化标识」选条带锁。
+    """按桶族与归一化标识选条带锁。
 
     归一化必须与 ``record_*``/``clear_*``/``_admit`` 用的 ``account_identifier`` 一致，
     否则 ``ABC`` 和 ``abc`` 会拿到不同的锁却写同一个计数键，临界区形同虚设。
-    带上 bucket 前缀是为了让登录与二次验证两个命名空间落在不同条带，避免同一主体的
-    两类请求无谓地互相排队;它们的计数键本来就是分开的，因此不带前缀也只是性能问题。
+    登录与二次验证使用独立锁数组，使嵌套准入即使条带索引相同也不会自锁。
     """
 
-    normalized = f"{bucket}:{account_identifier(identifier)}"
-    lock = _ACCOUNT_ADMISSION_LOCKS[hash(normalized) % len(_ACCOUNT_ADMISSION_LOCKS)]
+    normalized = account_identifier(identifier)
+    locks = _LOGIN_ADMISSION_LOCKS if bucket == "login" else _SECOND_FACTOR_ADMISSION_LOCKS
+    lock = locks[_admission_lock_index(normalized, len(locks))]
     return _AccountFailureAdmission(lock)
+
+
+def _admission_lock_index(identifier: str, lock_count: int) -> int:
+    """集中条带索引计算，两个桶族即使同索引也持有不同锁。"""
+
+    return hash(identifier) % lock_count
 
 
 def account_failure_admission(identifier: str) -> _AccountFailureAdmission:
@@ -191,7 +198,8 @@ def second_factor_failure_admission(identifier: str) -> _AccountFailureAdmission
 
     这里的主体是 ``CurrentUser.id`` 而不是用户名，但归一化沿用 ``account_identifier``，
     与 ``record_second_factor_failure`` / ``admit_second_factor`` 的计数键保持同一口径。
-    任何调用点都只获取一个条带锁、且不嵌套获取另一个，因此不存在死锁路径。
+    二次验证可嵌套在登录准入中；两个桶族使用独立锁数组，因此条带索引碰撞
+    也不会重复获取同一把非重入锁。
     """
 
     return _failure_admission("second-factor", identifier)

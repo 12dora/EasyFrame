@@ -22,9 +22,6 @@ class DataScope(StrEnum):
     ALL = "ALL"
 
 
-SCOPE_ORDER = {DataScope.SELF: 1, DataScope.MANAGED_USERS: 2, DataScope.ALL: 3}
-
-
 class UnsupportedDataScopeError(ValueError):
     """scope 不在共享白名单中；调用方必须安全拒绝。"""
 
@@ -33,7 +30,7 @@ def parse_data_scope(value: str | DataScope) -> DataScope:
     """严格解析 scope，不接受历史别名或未知值。"""
 
     try:
-        return DataScope(str(value).upper())
+        return DataScope(str(value))
     except ValueError as exc:
         raise UnsupportedDataScopeError(f"unsupported data scope: {value}") from exc
 
@@ -113,10 +110,25 @@ class CatalogPermission:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedGrant:
-    """逐条通过合同、目录和 scope 校验后的授权事实。"""
+    """内核统一授权上下文；本地与 EasyAuth 读取均投影为这一形状。"""
 
-    permission_code: str
-    data_scope: DataScope
+    code: str
+    scope: DataScope
+
+    # 兼容尚未迁移到统一字段名的 scope helper 调用方。
+    @property
+    def permission_code(self) -> str:
+        return self.code
+
+    @property
+    def data_scope(self) -> DataScope:
+        return self.scope
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedEasyAuthGrant(NormalizedGrant):
+    """仅 EasyAuth subject 展开使用的内部附加信息，不进入 CurrentUser 合同。"""
+
     source: str | None = None
     resolved: EasyAuthGrantResolved | None = None
 
@@ -150,10 +162,10 @@ def normalize_grants(
     catalog: Mapping[str, CatalogPermission],
     *,
     on_skip: SkipCallback | None = None,
-) -> tuple[NormalizedGrant, ...]:
+) -> tuple[_ResolvedEasyAuthGrant, ...]:
     """逐条隔离坏 grant；未知、停用、越界 scope 一律跳过。"""
 
-    normalized: list[NormalizedGrant] = []
+    normalized: list[_ResolvedEasyAuthGrant] = []
 
     def skip(reason: str, permission: str | None = None) -> None:
         if on_skip is not None:
@@ -178,26 +190,56 @@ def normalize_grants(
         if scope is DataScope.MANAGED_USERS and grant.resolved is None:
             skip("missing_resolved_users", grant.permission)
             continue
-        normalized.append(NormalizedGrant(grant.permission, scope, grant.source, grant.resolved))
+        normalized.append(_ResolvedEasyAuthGrant(grant.permission, scope, grant.source, grant.resolved))
+    return tuple(normalized)
+
+
+def normalize_local_grants(
+    grants: Iterable[Mapping[str, Any]],
+    catalog: Mapping[str, CatalogPermission],
+) -> tuple[NormalizedGrant, ...]:
+    """每次读取本地 grant 时按当前目录收缩，坏行逐条 fail-closed 剔除。"""
+
+    normalized: list[NormalizedGrant] = []
+    locally_grantable = {DataScope.SELF, DataScope.ALL}
+    for raw in grants:
+        if not isinstance(raw, Mapping):
+            continue
+        code = raw.get("code")
+        raw_scope = raw.get("scope")
+        if not isinstance(code, str) or not isinstance(raw_scope, str):
+            continue
+        permission = catalog.get(code)
+        if permission is None or not permission.active:
+            continue
+        try:
+            scope = parse_data_scope(raw_scope)
+        except UnsupportedDataScopeError:
+            continue
+        if scope not in permission.supported_scopes or scope not in locally_grantable:
+            continue
+        normalized.append(NormalizedGrant(code=code, scope=scope))
     return tuple(normalized)
 
 
 class ScopeGrant(Protocol):
-    permission_code: str
-    data_scope: Any
+    code: str
+    scope: Any
 
 
 def best_scope_for_grants(grants: Iterable[ScopeGrant], permission_code: str) -> DataScope | None:
-    """返回同一 permission 的最高合法 scope；未知 scope 安全拒绝。"""
+    """按 scope 偏序合并；SELF 与 MANAGED_USERS 不可比较时安全拒绝。"""
 
-    best: DataScope | None = None
+    scopes: set[DataScope] = set()
     for grant in grants:
-        if grant.permission_code != permission_code:
+        if grant.code != permission_code:
             continue
-        scope = parse_data_scope(str(grant.data_scope))
-        if best is None or SCOPE_ORDER[scope] > SCOPE_ORDER[best]:
-            best = scope
-    return best
+        scopes.add(parse_data_scope(str(grant.scope)))
+    if DataScope.ALL in scopes:
+        return DataScope.ALL
+    if len(scopes) == 1:
+        return next(iter(scopes))
+    return None
 
 
 Subject = TypeVar("Subject")
@@ -230,9 +272,9 @@ def union_subject_ids_for_permission(
 
     allowed: set[Subject] = set()
     for grant in grants:
-        if grant.permission_code != permission_code:
+        if grant.code != permission_code:
             continue
-        scope = parse_data_scope(str(grant.data_scope))
+        scope = parse_data_scope(str(grant.scope))
         subjects = subject_ids_for_scope(
             scope,
             current_subject_id=current_subject_id,
@@ -245,7 +287,7 @@ def union_subject_ids_for_permission(
 
 
 def allowed_external_user_ids(
-    grants: Iterable[NormalizedGrant],
+    grants: Iterable[_ResolvedEasyAuthGrant],
     permission_code: str,
     *,
     current_external_user_id: str,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import uuid
 from contextvars import ContextVar
@@ -39,9 +40,11 @@ from enterprise_platform.authz import (
     EasyAuthClientError,
     EasyAuthForbiddenError,
     EasyAuthPermissionClient,
+    NormalizedGrant,
     classify_connection_failure,
-    normalize_grants,
     normalize_catalog_risk_level,
+    normalize_grants,
+    normalize_local_grants,
 )
 from enterprise_platform.footer import sanitize_footer_html
 from enterprise_platform.health import safe_health_summary
@@ -87,6 +90,7 @@ from enterprise_platform.trusted_http import create_trusted_authority_transport
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 TIMING_EQUALIZER_HASH = pwd_context.hash("enterprise-platform-timing-equalizer")
+logger = logging.getLogger(__name__)
 JWT_ALGORITHM = "HS256"
 SIGNING_SECRET_ENV = "BLANK_JWT_SECRET"
 PREVIOUS_SIGNING_SECRET_ENV = "BLANK_JWT_SECRET_PREVIOUS"
@@ -236,35 +240,76 @@ def _consume_passkey_challenge(db, *, account_id: str, purpose: str, jti: str, n
 
 def seed_default_admin() -> None:
     mode = local_auth_mode()
-    if mode == "disabled":
-        return
     runtime = os.getenv("BLANK_RUNTIME_ENV", "production").strip().lower()
     if runtime == "production" and mode in {"development", "demo"}:
         raise RuntimeError("development/demo local auth cannot be enabled in production")
+    if mode == "disabled":
+        return
     username = os.getenv("BLANK_ADMIN_USERNAME", "admin")
-    password = os.getenv("BLANK_ADMIN_PASSWORD")
-    if not password or is_unsafe_bootstrap_secret(password, min_length=12):
-        raise RuntimeError("BLANK_ADMIN_PASSWORD must be at least 12 characters and must not use a public example")
     with SessionLocal() as db:
-        if db.query(Account.id).filter(Account.username == username).first() is None:
-            db.add(
-                Account(
-                    username=username,
-                    email=os.getenv("BLANK_ADMIN_EMAIL") or None,
-                    password_hash=pwd_context.hash(password),
-                    active=True,
-                    is_admin=True,
-                    must_change_password=True,
+        configured = db.query(Account).filter(Account.username == username).one_or_none()
+        if mode in {"enabled", "break_glass"}:
+            now = datetime.now(UTC)
+            if configured is not None:
+                if account_is_eligible(configured, now=now) and configured.external_source is None and configured.is_admin:
+                    return
+                raise RuntimeError("configured bootstrap username is not a usable local superadmin")
+            usable_admin = (
+                db.query(Account.id)
+                .filter(
+                    Account.external_source.is_(None),
+                    Account.is_admin.is_(True),
+                    Account.active.is_(True),
+                    or_(Account.expires_at.is_(None), Account.expires_at > now),
                 )
+                .first()
             )
-            db.commit()
+            if usable_admin is not None:
+                return
+        elif configured is not None:
+            # development/demo 保持 v1 行为：配置用户名存在即不改写。
+            return
+
+        password = os.getenv("BLANK_ADMIN_PASSWORD")
+        if not password or is_unsafe_bootstrap_secret(password, min_length=12):
+            raise RuntimeError("BLANK_ADMIN_PASSWORD must be at least 12 characters and must not use a public example")
+        db.add(
+            Account(
+                username=username,
+                email=os.getenv("BLANK_ADMIN_EMAIL") or None,
+                password_hash=pwd_context.hash(password),
+                active=True,
+                is_admin=True,
+                must_change_password=True,
+            )
+        )
+        db.commit()
 
 
 def local_auth_mode() -> str:
     mode = os.getenv("BLANK_LOCAL_AUTH_MODE", "disabled").strip().lower()
-    if mode not in {"disabled", "development", "demo", "break_glass"}:
-        raise RuntimeError("BLANK_LOCAL_AUTH_MODE must be disabled, development, demo, or break_glass")
+    if mode not in {"disabled", "development", "demo", "enabled", "break_glass"}:
+        raise RuntimeError("BLANK_LOCAL_AUTH_MODE must be disabled, development, demo, enabled, or break_glass")
     return mode
+
+
+def account_is_eligible(account: Account, *, now: datetime | None = None) -> bool:
+    """本地资格判定唯一实现；外部身份仅受 active 约束，不读取本地模式。"""
+
+    if not account.active:
+        return False
+    if account.external_source:
+        return True
+    current = now or datetime.now(UTC)
+    expires_at = account.expires_at
+    if expires_at is not None and (expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=UTC)) <= current:
+        return False
+    mode = local_auth_mode()
+    if mode == "disabled":
+        return False
+    if mode == "break_glass":
+        return bool(account.is_admin)
+    return True
 
 
 def security_capabilities(account: Account) -> SecurityCapabilities:
@@ -328,18 +373,23 @@ def _account_projection(account: Account, *, has_passkey: bool) -> LocalAccount:
 
 class BlankAccountAdapter:
     def authenticate_password(self, username: str, password: str) -> LocalAccount | None:
-        if local_auth_mode() == "disabled":
-            pwd_context.verify(password, TIMING_EQUALIZER_HASH)
-            return None
         with SessionLocal() as db:
-            account = db.query(Account).filter(Account.username == username).one_or_none()
-            if (
-                account is None
-                or not account.active
-                or not account.password_hash
-                or not pwd_context.verify(password, account.password_hash)
-            ):
-                pwd_context.verify(password, TIMING_EQUALIZER_HASH)
+            account = (
+                db.query(Account)
+                .filter(Account.username == username, Account.external_source.is_(None))
+                .one_or_none()
+            )
+            candidate_hash = (
+                account.password_hash if account is not None and account.password_hash else TIMING_EQUALIZER_HASH
+            )
+            try:
+                verified = pwd_context.verify(password, candidate_hash)
+            except (TypeError, ValueError):
+                verified = False
+            # 无真实 hash 时仍完整执行一次 bcrypt 以拉平时序，但 dummy hash 的
+            # 校验结果绝不能成为账号凭据。
+            password_matches = verified and bool(account is not None and account.password_hash)
+            if account is None or not password_matches or not account_is_eligible(account):
                 return None
             has_passkey = db.query(Passkey.id).filter(Passkey.account_id == account.id).first() is not None
             return _account_projection(account, has_passkey=has_passkey)
@@ -349,6 +399,7 @@ class BlankAccountAdapter:
             account = db.get(Account, account_id)
             return bool(
                 account
+                and account_is_eligible(account)
                 and account.totp_enabled
                 and account.totp_secret
                 and pyotp.TOTP(account.totp_secret).verify(code)
@@ -358,7 +409,7 @@ class BlankAccountAdapter:
         now = datetime.now(UTC)
         with SessionLocal() as db:
             account = db.get(Account, account_id)
-            if account is None or not account.active:
+            if account is None or not account_is_eligible(account):
                 raise AuthError(401, "登录态无效")
             auth_source = "external" if account.external_source else "local"
         return jwt.encode(
@@ -379,7 +430,7 @@ class BlankAccountAdapter:
         if principal_account_id:
             with SessionLocal() as db:
                 account = db.get(Account, principal_account_id)
-                if account is None or not account.active:
+                if account is None or not account_is_eligible(account):
                     raise AuthError(401, "登录态无效")
                 has_passkey = db.query(Passkey.id).filter(Passkey.account_id == account.id).first() is not None
                 db.expunge(account)
@@ -390,10 +441,8 @@ class BlankAccountAdapter:
         claims = _decode_session_token(token)
         with SessionLocal() as db:
             account = db.get(Account, claims.get("sub"))
-            if account is None or not account.active:
+            if account is None or not account_is_eligible(account):
                 raise AuthError(401, "登录态无效")
-            if claims.get("auth_source", "local") == "local" and local_auth_mode() == "disabled":
-                raise AuthError(401, "本地登录已禁用")
             issued_at = datetime.fromtimestamp(float(claims.get("session_started_at", claims["iat"])), tz=UTC)
             revoked_at = account.sessions_revoked_at
             if revoked_at and (revoked_at if revoked_at.tzinfo else revoked_at.replace(tzinfo=UTC)) >= issued_at:
@@ -404,12 +453,15 @@ class BlankAccountAdapter:
 
     def current_user(self) -> CurrentUser:
         account, _ = self._authenticated_account()
-        if account.is_admin and not account.external_source and local_auth_mode() != "disabled":
-            permissions = ALL_PERMISSIONS
+        if account.is_admin and not account.external_source:
+            grants = _superadmin_grants()
+            permissions = set(ALL_PERMISSIONS)
         elif not account.external_source:
-            permissions = _local_permissions(account)
+            grants = _local_grants(account)
+            permissions = {grant.code for grant in grants}
         else:
-            permissions = _snapshot_permissions(account)
+            grants = _snapshot_grants(account)
+            permissions = {grant.code for grant in grants}
         return CurrentUser(
             id=str(account.id),
             name=account.username,
@@ -419,6 +471,7 @@ class BlankAccountAdapter:
             must_change_password=account.must_change_password,
             has_local_password=bool(account.password_hash),
             permissions=sorted(permissions),
+            grants=list(grants),
             role_groups=_snapshot_role_groups(account),
             security_capabilities=security_capabilities(account),
         )
@@ -526,6 +579,9 @@ class BlankAccountAdapter:
         config = _passkey_config()
         now = datetime.now(UTC)
         with SessionLocal() as db:
+            account = db.get(Account, account_id)
+            if account is None or not account_is_eligible(account, now=now):
+                return False
             row = (
                 db.query(Passkey)
                 .filter(Passkey.account_id == account_id, Passkey.credential_id == credential_id)
@@ -647,6 +703,7 @@ class BlankAccountAdapter:
 class BlankLocalAccountAdmin(LocalAccountAdminPort):
     def list(self, *, search: str | None) -> tuple[list[LocalAccountSummary], int]:
         with SessionLocal() as db:
+            catalog = _catalog_permissions(db)
             passkey_counts = (
                 db.query(Passkey.account_id, func.count(Passkey.id)).group_by(Passkey.account_id).subquery()
             )
@@ -660,7 +717,7 @@ class BlankLocalAccountAdmin(LocalAccountAdminPort):
                 query = query.filter(or_(Account.username.ilike(term), Account.email.ilike(term)))
             rows = query.order_by(Account.created_at.asc(), Account.username.asc()).all()
             return [
-                _local_account_summary(account, passkey_count=int(passkey_count or 0))
+                _local_account_summary(account, passkey_count=int(passkey_count or 0), catalog=catalog)
                 for account, passkey_count in rows
             ], len(rows)
 
@@ -1160,16 +1217,35 @@ def record_platform_audit(
     before: dict[str, Any] | None,
     after: dict[str, Any] | None,
 ) -> None:
+    def bounded_text(value: object, limit: int) -> str:
+        """在唯一审计写边界收敛 ORM varchar 字段，避免调用方各自猜测列宽。"""
+
+        return str(value).strip()[:limit]
+
     with SessionLocal() as db:
         db.add(
             PlatformAuditLog(
-                actor_id=actor_id,
-                action=action,
+                actor_id=bounded_text(actor_id, 100),
+                action=bounded_text(action, 160),
                 before_data=jsonable_encoder(_redacted_setting(before or {})) if before is not None else None,
                 after_data=jsonable_encoder(_redacted_setting(after or {})) if after is not None else None,
             )
         )
         db.commit()
+
+
+def record_login_audit(actor_id: str, action: str, method: str) -> None:
+    """登录审计只记录模式与方法；写失败不得改变认证响应。"""
+
+    try:
+        record_platform_audit(
+            actor_id,
+            action,
+            None,
+            {"mode": local_auth_mode(), "method": method},
+        )
+    except Exception:
+        logger.exception("login audit write failed")
 
 
 class BlankUpstreamHealthAdapter:
@@ -1256,9 +1332,28 @@ def require_permission(code: str) -> None:
         raise AuthError(403, "缺少权限")
 
 
-def _snapshot_permissions(account: Account) -> set[str]:
+def _catalog_permissions(db) -> dict[str, CatalogPermission]:
+    """目录坏 scope 逐项忽略，不能让一条脏配置扩大权限或毒化整次读取。"""
+
+    catalog: dict[str, CatalogPermission] = {}
+    for row in db.query(PermissionCatalog).all():
+        scopes: set[DataScope] = set()
+        for raw_scope in row.supported_scopes if isinstance(row.supported_scopes, list | tuple) else ():
+            try:
+                scopes.add(DataScope(str(raw_scope)))
+            except ValueError:
+                continue
+        catalog[row.code] = CatalogPermission(
+            code=row.code,
+            supported_scopes=frozenset(scopes),
+            active=row.active,
+        )
+    return catalog
+
+
+def _snapshot_grants(account: Account) -> tuple[NormalizedGrant, ...]:
     if not account.external_source or not account.external_user_id:
-        return set()
+        return ()
     with SessionLocal() as db:
         integration = db.get(PlatformSetting, "easyauth")
         app_key = str((integration.value if integration else {}).get("app_key") or "")
@@ -1272,28 +1367,61 @@ def _snapshot_permissions(account: Account) -> set[str]:
             .one_or_none()
         )
         if snapshot is None:
-            return set()
+            return ()
         expires_at = snapshot.expires_at
         if (expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=UTC)) <= datetime.now(UTC):
-            return set()
-        catalog = {
-            row.code: CatalogPermission(
-                code=row.code,
-                supported_scopes=frozenset(DataScope(scope) for scope in row.supported_scopes),
-                active=row.active,
-            )
-            for row in db.query(PermissionCatalog).all()
-        }
-        return {grant.permission_code for grant in normalize_grants(snapshot.grants, catalog)}
+            return ()
+        return tuple(
+            NormalizedGrant(code=grant.code, scope=grant.scope)
+            for grant in normalize_grants(snapshot.grants, _catalog_permissions(db))
+        )
+
+
+def _local_grants(account: Account) -> tuple[NormalizedGrant, ...]:
+    with SessionLocal() as db:
+        catalog = _catalog_permissions(db)
+    baseline = ({"code": code, "scope": "SELF"} for code in BASELINE_SELF_SERVICE)
+    stored = account.local_permissions if isinstance(account.local_permissions, list) else []
+    return normalize_local_grants((*baseline, *stored), catalog)
+
+
+def _normalized_stored_local_grants(
+    account: Account,
+    catalog: dict[str, CatalogPermission] | None = None,
+) -> tuple[NormalizedGrant, ...]:
+    if catalog is None:
+        with SessionLocal() as db:
+            catalog = _catalog_permissions(db)
+    stored = account.local_permissions if isinstance(account.local_permissions, list) else []
+    return normalize_local_grants(stored, catalog)
+
+
+def _superadmin_grants() -> tuple[NormalizedGrant, ...]:
+    """超管权限来自单一注册表；ALL 显式支配 SELF，不作 scope 序数比较。"""
+
+    grants: list[NormalizedGrant] = []
+    for permission in FRAMEWORK_PERMISSIONS:
+        scopes = set(permission.supported_scopes) & {DataScope.SELF, DataScope.ALL}
+        if DataScope.ALL in scopes:
+            scope = DataScope.ALL
+        elif DataScope.SELF in scopes:
+            scope = DataScope.SELF
+        else:
+            continue
+        grants.append(NormalizedGrant(code=permission.code, scope=scope))
+    return tuple(grants)
+
+
+def _snapshot_permissions(account: Account) -> set[str]:
+    """兼容宿主内部旧调用方的 code 投影。"""
+
+    return {grant.code for grant in _snapshot_grants(account)}
 
 
 def _local_permissions(account: Account) -> set[str]:
-    with SessionLocal() as db:
-        active_codes = {
-            code for (code,) in db.query(PermissionCatalog.code).filter(PermissionCatalog.active.is_(True)).all()
-        }
-    stored = set(_stored_permission_codes(account))
-    return set(BASELINE_SELF_SERVICE) | (stored & active_codes)
+    """兼容宿主内部旧调用方的 code 投影。"""
+
+    return {grant.code for grant in _local_grants(account)}
 
 
 def _stored_permission_codes(account: Account) -> list[str]:
@@ -1421,7 +1549,12 @@ def _guarded_account_audit_state(account: Account) -> dict[str, Any]:
     }
 
 
-def _local_account_summary(account: Account, *, passkey_count: int) -> LocalAccountSummary:
+def _local_account_summary(
+    account: Account,
+    *,
+    passkey_count: int,
+    catalog: dict[str, CatalogPermission] | None = None,
+) -> LocalAccountSummary:
     return LocalAccountSummary(
         id=account.id,
         username=account.username,
@@ -1431,18 +1564,19 @@ def _local_account_summary(account: Account, *, passkey_count: int) -> LocalAcco
         totp_enabled=account.totp_enabled,
         passkey_count=passkey_count,
         must_change_password=account.must_change_password,
-        permission_count=len(_stored_permission_codes(account)),
+        permission_count=len(_normalized_stored_local_grants(account, catalog)),
         created_at=account.created_at,
     )
 
 
 def _local_account_detail(db, account: Account) -> LocalAccountDetail:
     passkey_count = int(db.query(func.count(Passkey.id)).filter(Passkey.account_id == account.id).scalar() or 0)
-    summary = _local_account_summary(account, passkey_count=passkey_count)
+    catalog = _catalog_permissions(db)
+    summary = _local_account_summary(account, passkey_count=passkey_count, catalog=catalog)
     return LocalAccountDetail(
         **summary.model_dump(),
         ui_locale=account.ui_locale,
-        permissions=_stored_permission_codes(account),
+        permissions=[grant.code for grant in _normalized_stored_local_grants(account, catalog)],
         baseline_permissions=sorted(BASELINE_SELF_SERVICE),
     )
 

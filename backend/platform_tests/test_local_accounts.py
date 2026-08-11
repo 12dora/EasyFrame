@@ -56,7 +56,7 @@ def _create_local_account(
             active=True,
             is_admin=False,
             must_change_password=False,
-            local_permissions=permissions or [],
+            local_permissions=[{"code": code, "scope": "ALL"} for code in permissions or []],
         )
         db.add(account)
         db.commit()

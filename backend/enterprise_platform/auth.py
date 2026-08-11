@@ -1,6 +1,7 @@
 """共享本地账户登录与二次验证编排。"""
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,6 +21,7 @@ REQUIRE_SECOND_FACTOR_CODE = "REQUIRE_SECOND_FACTOR"
 class AuthError(Exception):
     status_code: int
     detail: Any
+    kind: str = "credential"
 
 
 def is_credential_failure(error: AuthError) -> bool:
@@ -28,7 +30,7 @@ def is_credential_failure(error: AuthError) -> bool:
     detail = error.detail
     if isinstance(detail, dict) and detail.get("code") == REQUIRE_SECOND_FACTOR_CODE:
         return False
-    return error.status_code == 401
+    return error.status_code == 401 and error.kind == "credential"
 
 
 def authenticate_login(
@@ -37,23 +39,28 @@ def authenticate_login(
     password: str,
     totp_code: str | None,
     *,
-    before_second_factor: Callable[[str], None] | None = None,
+    before_second_factor: Callable[[str], AbstractContextManager[None] | None] | None = None,
 ) -> tuple[str, bool]:
     """密码 + 可选 TOTP 登录。
 
-    before_second_factor: 密码通过、进入二次验证之前以 account.id 回调一次,
-    宿主用它挂按账号的二次验证限流(防 TOTP 爆破);None 时行为与旧签名完全一致。
+    before_second_factor: 密码通过、进入二次验证之前以 account.id 回调一次；
+    宿主可返回覆盖整个验证阶段的上下文管理器，以原子执行准入与失败记账。
+    返回 None 及不传 callback 均保持旧签名行为。
     """
 
     account = require_password(port, username, password)
     methods = second_factor_methods(account)
     if methods:
-        if before_second_factor is not None:
-            before_second_factor(account.id)
-        if not totp_code or "totp" not in methods:
-            raise AuthError(401, {"code": REQUIRE_SECOND_FACTOR_CODE, "methods": methods})
-        if not port.verify_totp(account.id, totp_code):
-            raise AuthError(401, "TOTP 验证码错误")
+        admission = before_second_factor(account.id) if before_second_factor is not None else None
+        with admission or nullcontext():
+            if not totp_code or "totp" not in methods:
+                raise AuthError(
+                    401,
+                    {"code": REQUIRE_SECOND_FACTOR_CODE, "methods": methods},
+                    kind="second_factor_challenge",
+                )
+            if not port.verify_totp(account.id, totp_code):
+                raise AuthError(401, "TOTP 验证码错误", kind="second_factor")
     return port.issue_session(account.id), account.must_change_password
 
 
@@ -90,6 +97,8 @@ def complete_passkey_login(
     password: str,
     state_token: str,
     credential: dict[str, Any],
+    *,
+    before_second_factor: Callable[[str], AbstractContextManager[None] | None] | None = None,
 ) -> tuple[str, bool]:
     """完成通行密钥登录并签发会话。
 
@@ -98,7 +107,14 @@ def complete_passkey_login(
     """
 
     account = require_password(port, username, password)
-    # 仅当宿主事务成功消费挑战并验证断言后才签发会话,杜绝挑战重放多会话。
-    if not port.complete_passkey_login(account.id, state_token, credential):
-        raise AuthError(401, "通行密钥验证失败")
+    admission = before_second_factor(account.id) if before_second_factor is not None else None
+    with admission or nullcontext():
+        try:
+            verified = port.complete_passkey_login(account.id, state_token, credential)
+        except AuthError as exc:
+            # 密码已经通过，此后的宿主验证错误统一属于结构化二次验证失败。
+            raise AuthError(exc.status_code, exc.detail, kind="second_factor") from exc
+        # 仅当宿主事务成功消费挑战并验证断言后才签发会话,杜绝挑战重放多会话。
+        if not verified:
+            raise AuthError(401, "通行密钥验证失败", kind="second_factor")
     return port.issue_session(account.id), account.must_change_password

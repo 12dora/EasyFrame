@@ -9,6 +9,8 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field, field_validator
 from pydantic.alias_generators import to_camel
 
+from enterprise_platform.authz.core import NormalizedGrant
+
 
 class PlatformModel(BaseModel):
     model_config = {
@@ -140,6 +142,8 @@ class SecurityCapabilities(PlatformModel):
 
 
 class CurrentUser(PlatformModel):
+    """当前主体；permissions 是 code 兼容投影，grants 用于 scope 判定。"""
+
     id: str
     name: str
     email: str | None = None
@@ -148,6 +152,7 @@ class CurrentUser(PlatformModel):
     must_change_password: bool = False
     has_local_password: bool = False
     permissions: list[str] = Field(default_factory=list)
+    grants: list[NormalizedGrant] = Field(default_factory=list)
     role_groups: list[str] = Field(default_factory=list)
     security_capabilities: SecurityCapabilities = Field(default_factory=SecurityCapabilities)
 

@@ -14,6 +14,7 @@ from blank_app.adapters import (
     account_adapter,
     authorize_security_operation,
     local_account_admin,
+    record_login_audit,
     record_platform_audit,
     request_principal_account_id,
     request_token,
@@ -112,6 +113,7 @@ ports = PlatformPorts(
 security_hooks = PlatformSecurityHooks(
     ensure_local_auth_management_allowed=authorize_security_operation,
     after_event=record_platform_audit,
+    login_event=record_login_audit,
 )
 
 

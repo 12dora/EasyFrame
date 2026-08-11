@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, TypeVar
@@ -150,6 +151,10 @@ def _noop_after_event(
     return None
 
 
+def _noop_login_event(_actor_id: str, _action: str, _method: str) -> None:
+    return None
+
+
 def _identity_presenter(user: CurrentUser) -> CurrentUser:
     return user
 
@@ -162,6 +167,7 @@ class PlatformSecurityHooks:
     before_second_factor: Callable[[str, str, Request], None] = _noop_before_second_factor
     ensure_local_auth_management_allowed: Callable[[CurrentUser, str], None] = _noop_local_auth_policy
     after_event: Callable[[str, str, dict[str, Any] | None, dict[str, Any] | None], None] = _noop_after_event
+    login_event: Callable[[str, str, str], None] = _noop_login_event
     present_current_user: Callable[[CurrentUser], CurrentUser] = _identity_presenter
 
 
@@ -284,10 +290,52 @@ def create_platform_router(
 
     @router.post("/auth/login", response_model=LoginResponse, tags=["auth"])
     def login(body: LoginRequest, request: Request) -> LoginResponse:
-        def check() -> tuple[str, bool]:
-            return authenticate_login(ports.account, body.username, body.password, body.totp_code)
+        second_factor_used = False
 
-        token, must_change = login_guard.run(body.username, request, check, clear_on_success=True)
+        @contextmanager
+        def second_factor_admission(account_id: str):
+            nonlocal second_factor_used
+            second_factor_used = True
+            with second_factor_failure_admission(account_id):
+                admit_second_factor_attempt(account_id, "login", request)
+                try:
+                    yield
+                except AuthError as exc:
+                    if exc.kind == "second_factor":
+                        record_second_factor_failure(account_id)
+                        hooks.login_event(body.username, "auth.login.second_factor_failure", "totp")
+                    raise
+                else:
+                    clear_second_factor_failures(account_id)
+
+        def check() -> tuple[str, bool]:
+            return authenticate_login(
+                ports.account,
+                body.username,
+                body.password,
+                body.totp_code,
+                before_second_factor=second_factor_admission,
+            )
+
+        try:
+            token, must_change = login_guard.run(body.username, request, check, clear_on_success=True)
+        except HTTPException as exc:
+            if exc.status_code == 429:
+                hooks.login_event(
+                    body.username,
+                    "auth.login.rate_limited",
+                    "totp" if second_factor_used else "password",
+                )
+            elif not (
+                isinstance(exc.detail, dict) and exc.detail.get("code") == "REQUIRE_SECOND_FACTOR"
+            ) and not second_factor_used:
+                hooks.login_event(body.username, "auth.login.failure", "password")
+            raise
+        hooks.login_event(
+            body.username,
+            "auth.login.success",
+            "totp" if second_factor_used else "password",
+        )
         return LoginResponse(access_token=token, must_change_password=must_change)
 
     @router.post("/auth/login/passkey/begin", response_model=PasskeyLoginBeginResponse, tags=["auth"])
@@ -296,17 +344,59 @@ def create_platform_router(
             return begin_passkey_login(ports.account, body.username, body.password)
 
         # begin 只是挑战下发,登录尚未完成:不消耗额度,也不提前 reset。
-        _, challenge = login_guard.run(body.username, request, check, clear_on_success=False)
+        try:
+            _, challenge = login_guard.run(body.username, request, check, clear_on_success=False)
+        except HTTPException as exc:
+            hooks.login_event(
+                body.username,
+                "auth.login.rate_limited" if exc.status_code == 429 else "auth.login.failure",
+                "password",
+            )
+            raise
         return PasskeyLoginBeginResponse(options=challenge.options, state_token=challenge.state_token)
 
     @router.post("/auth/login/passkey/complete", response_model=LoginResponse, tags=["auth"])
     def passkey_login_complete(body: PasskeyLoginCompleteRequest, request: Request) -> LoginResponse:
+        second_factor_used = False
+        second_factor_failure_audited = False
+
+        @contextmanager
+        def passkey_admission(account_id: str):
+            nonlocal second_factor_failure_audited, second_factor_used
+            second_factor_used = True
+            with second_factor_failure_admission(account_id):
+                admit_second_factor_attempt(account_id, "login", request)
+                try:
+                    yield
+                except AuthError as exc:
+                    if exc.kind == "second_factor":
+                        record_second_factor_failure(account_id)
+                        hooks.login_event(body.username, "auth.login.second_factor_failure", "passkey")
+                        second_factor_failure_audited = True
+                    raise
+                else:
+                    clear_second_factor_failures(account_id)
+
         def check() -> tuple[str, bool]:
             return complete_passkey_login(
-                ports.account, body.username, body.password, body.state_token, body.credential
+                ports.account,
+                body.username,
+                body.password,
+                body.state_token,
+                body.credential,
+                before_second_factor=passkey_admission,
             )
 
-        token, must_change = login_guard.run(body.username, request, check, clear_on_success=True)
+        try:
+            token, must_change = login_guard.run(body.username, request, check, clear_on_success=True)
+        except HTTPException as exc:
+            if exc.status_code == 429:
+                action = "auth.login.rate_limited"
+                hooks.login_event(body.username, action, "passkey" if second_factor_used else "password")
+            elif not second_factor_failure_audited:
+                hooks.login_event(body.username, "auth.login.failure", "password")
+            raise
+        hooks.login_event(body.username, "auth.login.success", "passkey")
         return LoginResponse(access_token=token, must_change_password=must_change)
 
     @router.get("/auth/me", response_model=CurrentUser, tags=["auth"])
