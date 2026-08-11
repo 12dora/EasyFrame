@@ -11,3 +11,6 @@ playwright-report/
 
 # 宿主 pip install -e backend 的本地构建产物
 backend/*.egg-info/
+
+# 本地开发 venv(测试走 run-local-tests.sh 或 make blank-check)
+backend/.venv/

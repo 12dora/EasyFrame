@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from enterprise_platform.authz.core import DataScope, UnsupportedDataScopeError, parse_data_scope
+
+RiskLevel = Literal["standard", "high"]
+
+
+def normalize_catalog_risk_level(value: object) -> RiskLevel:
+    """目录存量未知风险等级按高风险处理。"""
+
+    if value == "standard":
+        return "standard"
+    return "high"
 
 
 class ManifestRegistrationError(ValueError):
@@ -21,8 +32,9 @@ class PermissionRegistration(BaseModel):
     code: str = Field(min_length=1)
     domain: str = Field(min_length=1)
     resource: str = Field(min_length=1)
+    group_key: str | None = None
     supported_scopes: tuple[DataScope, ...] = Field(min_length=1)
-    risk_level: str = Field(min_length=1)
+    risk_level: RiskLevel
     active: bool = True
 
     @field_validator("supported_scopes", mode="before")

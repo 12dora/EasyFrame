@@ -28,6 +28,8 @@ from enterprise_platform.authz.manifest import (
     PermissionManifestRegistration,
     PermissionManifestRegistry,
     PermissionRegistration,
+    RiskLevel,
+    normalize_catalog_risk_level,
 )
 from enterprise_platform.authz.principal import (
     PrincipalValidationError,
@@ -52,11 +54,13 @@ __all__ = [
     "PermissionManifestRegistry",
     "PermissionRegistration",
     "PrincipalValidationError",
+    "RiskLevel",
     "UnsupportedDataScopeError",
     "UpstreamPrincipal",
     "allowed_external_user_ids",
     "best_scope_for_grants",
     "classify_connection_failure",
+    "normalize_catalog_risk_level",
     "normalize_grants",
     "parse_data_scope",
     "parse_grants_isolated",

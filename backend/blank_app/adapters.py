@@ -30,6 +30,7 @@ from blank_app.models import (
     PlatformAuditLog,
     PlatformSetting,
 )
+from blank_app.permission_registry import FRAMEWORK_PERMISSIONS
 from enterprise_platform import passkeys as shared_passkeys
 from enterprise_platform.auth import AuthError
 from enterprise_platform.authz import (
@@ -40,6 +41,7 @@ from enterprise_platform.authz import (
     EasyAuthPermissionClient,
     classify_connection_failure,
     normalize_grants,
+    normalize_catalog_risk_level,
 )
 from enterprise_platform.footer import sanitize_footer_html
 from enterprise_platform.health import safe_health_summary
@@ -99,22 +101,7 @@ _PASSKEY_CHALLENGE_KEY_PREFIX = "passkey:"
 request_token: ContextVar[str | None] = ContextVar("blank_request_token", default=None)
 request_principal_account_id: ContextVar[str | None] = ContextVar("blank_principal_account_id", default=None)
 
-ALL_PERMISSIONS = {
-    "auth.totp.create",
-    "auth.totp.advance",
-    "auth.passkey.view",
-    "auth.passkey.create",
-    "accounts.local.view",
-    "accounts.local.manage",
-    "settings.app_setting.update",
-    "identity.integration.view",
-    "identity.integration.manage",
-    "authz.integration.view",
-    "authz.integration.manage",
-    "ops.upstream_health.view",
-    "ops.upstream_health.manage",
-    "notification.center.view",
-}
+ALL_PERMISSIONS = {permission.code for permission in FRAMEWORK_PERMISSIONS}
 
 # 共享 router 传入的 operation -> SecurityCapabilities 字段;缺失即视为未知操作并拒绝。
 SECURITY_OPERATION_CAPABILITIES: dict[str, str] = {
@@ -685,7 +672,18 @@ class BlankLocalAccountAdmin(LocalAccountAdminPort):
                 .order_by(PermissionCatalog.code.asc())
                 .all()
             )
-            return [LocalAccountPermissionCatalogItem.model_validate(row) for row in rows]
+            return [
+                LocalAccountPermissionCatalogItem.model_validate(
+                    {
+                        "code": row.code,
+                        "domain": row.domain,
+                        "resource": row.resource,
+                        "risk_level": normalize_catalog_risk_level(row.risk_level),
+                        "active": row.active,
+                    }
+                )
+                for row in rows
+            ]
 
     def create(self, payload: CreateLocalAccountRequest, *, actor_id: str) -> LocalAccountDetail:
         permissions = _validate_grant_codes(payload.permissions)

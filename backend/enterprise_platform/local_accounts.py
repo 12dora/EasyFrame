@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import Field
 
 from enterprise_platform.auth import AuthError
+from enterprise_platform.authz import RiskLevel
 from enterprise_platform.schemas import CurrentUser, PasswordValue, PlatformModel, StrictPlatformModel
 
 LOCAL_ACCOUNTS_VIEW = "accounts.local.view"
@@ -56,7 +57,7 @@ class LocalAccountPermissionCatalogItem(PlatformModel):
     code: str
     domain: str
     resource: str
-    risk_level: str
+    risk_level: RiskLevel
     active: bool
 
 

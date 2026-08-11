@@ -591,3 +591,41 @@ def test_local_account_permission_catalog_is_full_and_available_to_view_only_acc
 
         integration_catalog = client.get("/api/v1/authz-integration/permission-catalog", headers=headers)
         assert integration_catalog.status_code == 403
+
+
+def test_catalog_endpoints_normalize_unknown_stored_risk_level() -> None:
+    from blank_app.main import app
+
+    code = f"test.catalog-risk.{uuid.uuid4().hex}"
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        with SessionLocal() as db:
+            db.add(
+                PermissionCatalog(
+                    code=code,
+                    name_zh="风险归一化测试",
+                    name_en="Risk normalization test",
+                    domain="test",
+                    resource="test.catalog-risk",
+                    supported_scopes=["ALL"],
+                    risk_level="medium",
+                    active=True,
+                )
+            )
+            db.commit()
+
+        try:
+            local_response = client.get("/api/v1/local-accounts/permission-catalog", headers=headers)
+            assert local_response.status_code == 200
+            local_item = next(item for item in local_response.json()["data"] if item["code"] == code)
+            assert local_item["riskLevel"] == "high"
+
+            authz_response = client.get("/api/v1/authz-integration/permission-catalog", headers=headers)
+            assert authz_response.status_code == 200
+            authz_item = next(item for item in authz_response.json() if item["code"] == code)
+            assert authz_item["riskLevel"] == "high"
+        finally:
+            # 测试约束:临时目录行不得污染后续用例。
+            with SessionLocal() as db:
+                db.query(PermissionCatalog).filter(PermissionCatalog.code == code).delete()
+                db.commit()

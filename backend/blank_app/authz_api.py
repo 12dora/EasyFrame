@@ -26,6 +26,7 @@ from blank_app.adapters import (
 )
 from blank_app.database import SessionLocal
 from blank_app.models import Account, DescriptorKey, PermissionCatalog, PermissionSnapshot, PlatformSetting
+from blank_app.permission_registry import FRAMEWORK_PERMISSIONS
 from enterprise_platform.auth import AuthError
 from enterprise_platform.authorization import create_authorization_operations_router
 from enterprise_platform.authz import (
@@ -36,9 +37,10 @@ from enterprise_platform.authz import (
     EasyAuthPermissionClient,
     PermissionManifestRegistration,
     PermissionManifestRegistry,
-    PermissionRegistration,
     PrincipalValidationError,
+    RiskLevel,
     classify_connection_failure,
+    normalize_catalog_risk_level,
     normalize_grants,
     parse_upstream_principal_from_headers,
 )
@@ -62,63 +64,6 @@ from enterprise_platform.schemas import (
 )
 from enterprise_platform.secrets import SecretConfigurationError, decrypt_secret
 
-FRAMEWORK_PERMISSIONS = (
-    PermissionRegistration(
-        code="auth.totp.create",
-        domain="auth",
-        resource="totp",
-        supported_scopes=[DataScope.SELF],
-        risk_level="high",
-    ),
-    PermissionRegistration(
-        code="auth.totp.advance",
-        domain="auth",
-        resource="totp",
-        supported_scopes=[DataScope.SELF],
-        risk_level="high",
-    ),
-    PermissionRegistration(
-        code="auth.passkey.view",
-        domain="auth",
-        resource="passkey",
-        supported_scopes=[DataScope.SELF],
-        risk_level="standard",
-    ),
-    PermissionRegistration(
-        code="auth.passkey.create",
-        domain="auth",
-        resource="passkey",
-        supported_scopes=[DataScope.SELF],
-        risk_level="high",
-    ),
-    PermissionRegistration(
-        code="notification.center.view",
-        domain="notification",
-        resource="notification.center",
-        supported_scopes=[DataScope.SELF],
-        risk_level="standard",
-    ),
-    *(
-        PermissionRegistration(
-            code=code,
-            domain=code.split(".", 1)[0],
-            resource=code.rsplit(".", 1)[0],
-            supported_scopes=[DataScope.ALL],
-            risk_level="high" if code.endswith("manage") or code.endswith("update") else "standard",
-        )
-        for code in (
-            "accounts.local.view",
-            "accounts.local.manage",
-            "settings.app_setting.update",
-            "identity.integration.view",
-            "identity.integration.manage",
-            "authz.integration.view",
-            "authz.integration.manage",
-            "ops.upstream_health.view",
-            "ops.upstream_health.manage",
-        )
-    ),
-)
 FRAMEWORK_MANIFEST = PermissionManifestRegistration(
     schema_version=1,
     app_key="enterprise-blank",
@@ -161,7 +106,7 @@ class CatalogItemResponse(PlatformModel):
     domain: str
     resource: str
     supported_scopes: list[str]
-    risk_level: str
+    risk_level: RiskLevel
     active: bool
     action: str = ""
 
@@ -840,7 +785,21 @@ class BlankAuthorizationOperations:
             rows = query.order_by(PermissionCatalog.code.asc()).all()
             return [
                 AuthorizationCatalogItem.model_validate(
-                    {**CatalogItemResponse.model_validate(row).model_dump(), "action": row.code.rsplit(".", 1)[-1]}
+                    {
+                        **CatalogItemResponse.model_validate(
+                            {
+                                "code": row.code,
+                                "name_zh": row.name_zh,
+                                "name_en": row.name_en,
+                                "domain": row.domain,
+                                "resource": row.resource,
+                                "supported_scopes": row.supported_scopes,
+                                "risk_level": normalize_catalog_risk_level(row.risk_level),
+                                "active": row.active,
+                            }
+                        ).model_dump(),
+                        "action": row.code.rsplit(".", 1)[-1],
+                    }
                 )
                 for row in rows
             ]

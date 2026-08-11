@@ -490,7 +490,7 @@ class AuthorizationCatalogItem(PlatformModel):
     resource: str
     action: str = ""
     supported_scopes: list[str] = Field(default_factory=list)
-    risk_level: str
+    risk_level: Literal["standard", "high"]
     active: bool
 
 
