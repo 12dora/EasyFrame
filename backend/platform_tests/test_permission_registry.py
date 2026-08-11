@@ -36,7 +36,8 @@ def test_seed_platform_catalog_upserts_registry_and_deactivates_other_codes() ->
         row = db.get(PermissionCatalog, registered.code)
         assert row is not None
         row.domain = "drifted"
-        row.risk_level = "legacy"
+        row.group_key = "drifted.group"
+        row.risk_level = "standard" if registered.risk_level == "high" else "high"
         row.active = False
         db.add(
             PermissionCatalog(
@@ -64,6 +65,7 @@ def test_seed_platform_catalog_upserts_registry_and_deactivates_other_codes() ->
                 row = rows[permission.code]
                 assert row.domain == permission.domain
                 assert row.resource == permission.resource
+                assert row.group_key == permission.group_key
                 assert row.supported_scopes == [scope.value for scope in permission.supported_scopes]
                 assert row.risk_level == permission.risk_level
                 assert row.active is permission.active
@@ -91,9 +93,33 @@ def test_seed_platform_catalog_inserts_missing_registry_row() -> None:
         row = db.get(PermissionCatalog, registered.code)
         assert row is not None
         assert (row.name_zh, row.name_en) == expected_names
+        assert row.group_key == registered.group_key
         assert row.supported_scopes == [scope.value for scope in registered.supported_scopes]
         assert row.risk_level == registered.risk_level
         assert row.active is registered.active
+
+
+def test_seed_platform_catalog_persists_optional_group_key(monkeypatch) -> None:
+    import blank_app.authz_api as authz_api
+
+    original = authz_api.FRAMEWORK_PERMISSIONS
+    target = original[0]
+    grouped = target.model_copy(update={"group_key": "auth.self_service"})
+    monkeypatch.setattr(
+        authz_api,
+        "FRAMEWORK_PERMISSIONS",
+        tuple(grouped if permission.code == target.code else permission for permission in original),
+    )
+    try:
+        authz_api.seed_platform_catalog()
+        with SessionLocal() as db:
+            row = db.get(PermissionCatalog, target.code)
+            assert row is not None
+            assert row.group_key == "auth.self_service"
+    finally:
+        # 测试约束:恢复真实注册表投影，避免临时分组污染后续用例。
+        monkeypatch.setattr(authz_api, "FRAMEWORK_PERMISSIONS", original)
+        authz_api.seed_platform_catalog()
 
 
 def test_manifest_keeps_v1_domain_group_projection(monkeypatch) -> None:

@@ -699,7 +699,7 @@ class BlankLocalAccountAdmin(LocalAccountAdminPort):
                 password_hash=pwd_context.hash(payload.password),
                 active=True,
                 is_admin=payload.is_admin,
-                local_permissions=[] if payload.is_admin else permissions,
+                local_permissions=[] if payload.is_admin else _grant_objects_for_codes(permissions),
                 must_change_password=payload.must_change_password,
             )
             db.add(account)
@@ -806,8 +806,8 @@ class BlankLocalAccountAdmin(LocalAccountAdminPort):
             account = _get_local_account_or_404(db, account_id)
             if account.is_admin:
                 raise AuthError(422, "管理员账户不能写入本地权限")
-            before = {"targetAccountId": str(account.id), "permissions": list(account.local_permissions or [])}
-            account.local_permissions = permissions
+            before = {"targetAccountId": str(account.id), "permissions": _stored_permission_codes(account)}
+            account.local_permissions = _grant_objects_for_codes(permissions)
             db.commit()
             db.refresh(account)
             detail = _local_account_detail(db, account)
@@ -1292,8 +1292,43 @@ def _local_permissions(account: Account) -> set[str]:
         active_codes = {
             code for (code,) in db.query(PermissionCatalog.code).filter(PermissionCatalog.active.is_(True)).all()
         }
-    stored = {code for code in (account.local_permissions or []) if isinstance(code, str)}
+    stored = set(_stored_permission_codes(account))
     return set(BASELINE_SELF_SERVICE) | (stored & active_codes)
+
+
+def _stored_permission_codes(account: Account) -> list[str]:
+    """兼容迁移前字符串与迁移后 grant 对象两种存储形态。"""
+
+    codes: list[str] = []
+    for item in account.local_permissions or []:
+        code = item if isinstance(item, str) else item.get("code") if isinstance(item, dict) else None
+        if isinstance(code, str):
+            codes.append(code)
+    return codes
+
+
+def _preferred_local_scope(scopes: object) -> str:
+    if isinstance(scopes, list | tuple):
+        if "ALL" in scopes:
+            return "ALL"
+        if "SELF" in scopes:
+            return "SELF"
+    # 目录竞争删除时保留 code，由后续读取归一化剔除。
+    return "ALL"
+
+
+def _grant_objects_for_codes(codes: list[str]) -> list[dict[str, str]]:
+    with SessionLocal() as db:
+        scopes_by_code = {
+            code: scopes
+            for code, scopes in db.query(PermissionCatalog.code, PermissionCatalog.supported_scopes)
+            .filter(PermissionCatalog.code.in_(codes))
+            .all()
+        }
+    return [
+        {"code": code, "scope": _preferred_local_scope(scopes_by_code.get(code))}
+        for code in codes
+    ]
 
 
 def _normalized_email(value: str | None) -> str | None:
@@ -1380,7 +1415,7 @@ def _guarded_account_audit_state(account: Account) -> dict[str, Any]:
         "active": account.active,
         "isAdmin": account.is_admin,
         "uiLocale": account.ui_locale,
-        "permissions": list(account.local_permissions or []),
+        "permissions": _stored_permission_codes(account),
         "mustChangePassword": account.must_change_password,
         "totpEnabled": account.totp_enabled,
     }
@@ -1396,7 +1431,7 @@ def _local_account_summary(account: Account, *, passkey_count: int) -> LocalAcco
         totp_enabled=account.totp_enabled,
         passkey_count=passkey_count,
         must_change_password=account.must_change_password,
-        permission_count=len(account.local_permissions or []),
+        permission_count=len(_stored_permission_codes(account)),
         created_at=account.created_at,
     )
 
@@ -1407,7 +1442,7 @@ def _local_account_detail(db, account: Account) -> LocalAccountDetail:
     return LocalAccountDetail(
         **summary.model_dump(),
         ui_locale=account.ui_locale,
-        permissions=list(account.local_permissions or []),
+        permissions=_stored_permission_codes(account),
         baseline_permissions=sorted(BASELINE_SELF_SERVICE),
     )
 

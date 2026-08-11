@@ -198,6 +198,7 @@ def seed_platform_catalog() -> None:
                     name_en=name_en,
                     domain=permission.domain,
                     resource=permission.resource,
+                    group_key=permission.group_key,
                     supported_scopes=[scope.value for scope in permission.supported_scopes],
                     risk_level=permission.risk_level,
                     active=permission.active,
@@ -208,6 +209,7 @@ def seed_platform_catalog() -> None:
                 row.name_en = name_en
                 row.domain = permission.domain
                 row.resource = permission.resource
+                row.group_key = permission.group_key
                 row.supported_scopes = [scope.value for scope in permission.supported_scopes]
                 row.risk_level = permission.risk_level
                 row.active = permission.active

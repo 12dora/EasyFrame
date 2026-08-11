@@ -5,7 +5,20 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid, func, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from blank_app.database import BlankBase
@@ -23,7 +36,9 @@ class Account(BlankBase):
     external_user_id: Mapped[str | None] = mapped_column(String(128))
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
-    local_permissions: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    local_permissions: Mapped[list[str | dict[str, str]]] = mapped_column(JSON, default=list, server_default="[]")
+    local_grants_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     ui_locale: Mapped[str] = mapped_column(String(10), default="zh-CN", server_default="zh-CN")
     totp_secret: Mapped[str | None] = mapped_column(String(100))
@@ -34,6 +49,10 @@ class Account(BlankBase):
 
     __table_args__ = (
         UniqueConstraint("external_source", "external_user_id", name="uq_platform_account_external_identity"),
+        CheckConstraint(
+            "external_source IS NULL OR (password_hash IS NULL AND is_admin = false)",
+            name="ck_platform_accounts_external_identity",
+        ),
     )
 
 
@@ -117,8 +136,16 @@ class PermissionCatalog(BlankBase):
     domain: Mapped[str] = mapped_column(String(80))
     resource: Mapped[str] = mapped_column(String(120))
     supported_scopes: Mapped[list[str]] = mapped_column(JSON)
+    group_key: Mapped[str | None] = mapped_column(Text)
     risk_level: Mapped[str] = mapped_column(String(30), default="standard", server_default="standard")
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+
+    __table_args__ = (
+        CheckConstraint(
+            "risk_level IN ('standard', 'high')",
+            name="ck_platform_permission_catalog_risk_level",
+        ),
+    )
 
 
 class PermissionSnapshot(BlankBase):
