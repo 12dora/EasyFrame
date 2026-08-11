@@ -1,7 +1,6 @@
 """add local permissions to platform accounts."""
 
 import sqlalchemy as sa
-
 from alembic import op
 
 revision = "0003_local_permissions"

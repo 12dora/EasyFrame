@@ -326,9 +326,10 @@ def create_platform_router(
                     "auth.login.rate_limited",
                     "totp" if second_factor_used else "password",
                 )
-            elif not (
-                isinstance(exc.detail, dict) and exc.detail.get("code") == "REQUIRE_SECOND_FACTOR"
-            ) and not second_factor_used:
+            elif (
+                not (isinstance(exc.detail, dict) and exc.detail.get("code") == "REQUIRE_SECOND_FACTOR")
+                and not second_factor_used
+            ):
                 hooks.login_event(body.username, "auth.login.failure", "password")
             raise
         hooks.login_event(

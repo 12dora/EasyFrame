@@ -71,9 +71,7 @@ class PasskeyError(Exception):
         self.status_code = status_code
 
 
-def begin_registration(
-    *, user_id: str, username: str, config: PasskeyConfig
-) -> tuple[dict[str, Any], IssuedState]:
+def begin_registration(*, user_id: str, username: str, config: PasskeyConfig) -> tuple[dict[str, Any], IssuedState]:
     """签发注册挑战及宿主必须持久化的一次性状态。"""
 
     options = webauthn.generate_registration_options(

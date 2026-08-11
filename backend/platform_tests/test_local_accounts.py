@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Iterator, Mapping, Sequence
 
 import pyotp
 import pytest
@@ -22,8 +22,8 @@ from blank_app.models import (
     PlatformAuditLog,
 )
 from platform_tests.local_accounts_conformance import (
-    AuditRecord,
     HOST_CONTRACT_MEMBERS,
+    AuditRecord,
     LocalGrant,
     LoginModes,
     RawAccount,

@@ -194,9 +194,7 @@ def _catalog_map(rows: list[LocalPermissionRecord]) -> dict[str, LocalPermission
     return {row.code: row for row in rows if row.active}
 
 
-def _normalize_stored_grants(
-    values: list[Any], catalog: dict[str, LocalPermissionRecord]
-) -> list[LocalGrant]:
+def _normalize_stored_grants(values: list[Any], catalog: dict[str, LocalPermissionRecord]) -> list[LocalGrant]:
     result: list[LocalGrant] = []
     seen: set[str] = set()
     for value in values or []:
@@ -213,9 +211,7 @@ def _normalize_stored_grants(
     return result
 
 
-def _validate_grants(
-    grants: list[LocalGrant], catalog: dict[str, LocalPermissionRecord]
-) -> list[LocalGrant]:
+def _validate_grants(grants: list[LocalGrant], catalog: dict[str, LocalPermissionRecord]) -> list[LocalGrant]:
     seen: set[str] = set()
     result: list[LocalGrant] = []
     for grant in grants:
@@ -241,11 +237,7 @@ def _grant_tuples(grants: list[LocalGrant]) -> set[tuple[str, str]]:
 
 
 def _high_codes(catalog: dict[str, LocalPermissionRecord]) -> set[str]:
-    return {
-        code
-        for code, row in catalog.items()
-        if normalize_catalog_risk_level(row.risk_level) == "high"
-    }
+    return {code for code, row in catalog.items() if normalize_catalog_risk_level(row.risk_level) == "high"}
 
 
 def _touches_high(before: list[LocalGrant], after: list[LocalGrant], *, high_codes: set[str]) -> bool:
@@ -409,7 +401,13 @@ class _LocalAccountService:
                 after={
                     "targetAccountId": str(account.id),
                     "changedKeys": [
-                        "username", "email", "password", "mustChangePassword", "isAdmin", "permissions", "expiresAt"
+                        "username",
+                        "email",
+                        "password",
+                        "mustChangePassword",
+                        "isAdmin",
+                        "permissions",
+                        "expiresAt",
                     ],
                 },
             )

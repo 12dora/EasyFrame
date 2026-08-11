@@ -27,9 +27,7 @@ def test_model_metadata_matches_local_accounts_v2_schema() -> None:
     assert str(account_columns.local_grants_version.server_default.arg) == "0"
     assert account_columns.expires_at.nullable is True
     assert account_columns.expires_at.type.timezone is True
-    assert "ck_platform_accounts_external_identity" in {
-        constraint.name for constraint in Account.__table__.constraints
-    }
+    assert "ck_platform_accounts_external_identity" in {constraint.name for constraint in Account.__table__.constraints}
 
     catalog_columns = PermissionCatalog.__table__.c
     assert catalog_columns.group_key.nullable is True
@@ -104,12 +102,10 @@ def test_upgrade_normalizes_legacy_risk_and_local_permissions() -> None:
         engine.dispose()
         command.upgrade(config, "head")
         with engine.connect() as connection:
-            assert connection.scalar(
-                sa.select(catalog.c.risk_level).where(catalog.c.code == permission_code)
-            ) == "high"
-            assert connection.scalar(
-                sa.select(accounts.c.local_permissions).where(accounts.c.id == account_id)
-            ) == [{"code": permission_code, "scope": "ALL"}]
+            assert connection.scalar(sa.select(catalog.c.risk_level).where(catalog.c.code == permission_code)) == "high"
+            assert connection.scalar(sa.select(accounts.c.local_permissions).where(accounts.c.id == account_id)) == [
+                {"code": permission_code, "scope": "ALL"}
+            ]
     finally:
         try:
             engine.dispose()
@@ -126,9 +122,7 @@ def test_upgrade_normalizes_legacy_risk_and_local_permissions() -> None:
     ("password_hash", "is_admin"),
     [("unexpected-password-hash", False), (None, True)],
 )
-def test_external_identity_check_rejects_password_or_admin(
-    password_hash: str | None, is_admin: bool
-) -> None:
+def test_external_identity_check_rejects_password_or_admin(password_hash: str | None, is_admin: bool) -> None:
     with SessionLocal() as db:
         db.add(
             Account(

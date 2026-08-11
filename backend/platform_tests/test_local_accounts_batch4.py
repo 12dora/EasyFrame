@@ -186,9 +186,7 @@ def test_delegated_is_admin_both_directions_are_422() -> None:
 
     headers = _operator_headers("delegated")
     with TestClient(app) as client:
-        promote = client.patch(
-            f"/api/v1/local-accounts/{_account()}", headers=headers, json={"isAdmin": True}
-        )
+        promote = client.patch(f"/api/v1/local-accounts/{_account()}", headers=headers, json={"isAdmin": True})
         demote = client.patch(
             f"/api/v1/local-accounts/{_account(kind='admin')}", headers=headers, json={"isAdmin": False}
         )
@@ -201,9 +199,7 @@ def test_delegated_is_admin_both_directions_are_422() -> None:
 def test_self_operation_cells(operator: str, operation: str) -> None:
     from blank_app.main import app
 
-    account_id = (
-        str(_admin_account_id()) if operator == "superadmin" else _account(manager=True)
-    )
+    account_id = str(_admin_account_id()) if operator == "superadmin" else _account(manager=True)
     headers = _session_headers(account_id)
     path = f"/api/v1/local-accounts/{account_id}"
     with TestClient(app) as client:
@@ -216,9 +212,7 @@ def test_self_operation_cells(operator: str, operation: str) -> None:
                 path, headers=headers, json={"expiresAt": (datetime.now(UTC) + timedelta(days=1)).isoformat()}
             )
         elif operation == "password":
-            response = client.post(
-                f"{path}/password", headers=headers, json={"password": "Batch4-self-password-44!"}
-            )
+            response = client.post(f"{path}/password", headers=headers, json={"password": "Batch4-self-password-44!"})
         else:
             response = client.delete(f"{path}/totp", headers=headers)
     assert response.status_code == 403
@@ -398,9 +392,7 @@ def test_expiry_tristate_promotion_version_and_catalog_projection() -> None:
         assert created.json()["expired"] is False
         assert created.json()["expiresAt"] is not None
         account_id = created.json()["id"]
-        promoted = client.patch(
-            f"/api/v1/local-accounts/{account_id}", headers=headers, json={"isAdmin": True}
-        )
+        promoted = client.patch(f"/api/v1/local-accounts/{account_id}", headers=headers, json={"isAdmin": True})
         assert promoted.status_code == 200
         assert promoted.json()["expiresAt"] is None
         assert promoted.json()["permissions"] == []
@@ -581,9 +573,11 @@ def test_concurrent_admin_changes_preserve_one_usable_admin() -> None:
     assert sum(status in {200, 204} for status in statuses) == 1
     assert statuses.count(422) == 1
     with SessionLocal() as db:
-        usable = db.query(Account).filter(
-            Account.external_source.is_(None), Account.active.is_(True), Account.is_admin.is_(True)
-        ).count()
+        usable = (
+            db.query(Account)
+            .filter(Account.external_source.is_(None), Account.active.is_(True), Account.is_admin.is_(True))
+            .count()
+        )
         assert usable >= 1
         seed = db.query(Account).filter(Account.username == os.environ["BLANK_ADMIN_USERNAME"]).one()
         seed.is_admin = True

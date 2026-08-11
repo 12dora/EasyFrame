@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import uuid
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
@@ -90,9 +89,7 @@ def test_unified_eligibility_invalidates_login_and_existing_sessions(monkeypatch
         rejected = _login(client, normal_name, password)
         assert rejected.status_code == 401
         assert rejected.json()["detail"] == "用户名或密码错误"
-        assert client.get(
-            "/api/v1/auth/me", headers={"Authorization": f"Bearer {normal_token}"}
-        ).status_code == 401
+        assert client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {normal_token}"}).status_code == 401
         assert _login(client, admin_name, password).status_code == 200
 
         monkeypatch.setenv("BLANK_LOCAL_AUTH_MODE", "disabled")
@@ -112,9 +109,7 @@ def test_unified_eligibility_invalidates_login_and_existing_sessions(monkeypatch
             db.refresh(external)
             external_id = str(external.id)
         sso_token = account_adapter.issue_session(external_id)
-        assert client.get(
-            "/api/v1/auth/me", headers={"Authorization": f"Bearer {sso_token}"}
-        ).status_code == 200
+        assert client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {sso_token}"}).status_code == 200
 
     assert admin_id
 

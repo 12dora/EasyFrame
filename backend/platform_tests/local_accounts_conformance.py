@@ -45,14 +45,14 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Mapping, Protocol, Sequence
+from typing import Protocol
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 
 LocalGrant = Mapping[str, str]
 STANDARD_GRANT: dict[str, str] = {"code": "accounts.local.view", "scope": "ALL"}
@@ -432,9 +432,7 @@ def check_crud_local_grants_cas_and_audit(host: ConformanceHost) -> None:
             deleted = client.delete(detail_path, headers=headers)
             _assert_status(deleted, 204)
             _assert_status(client.get(detail_path, headers=headers), 404)
-            assert dict(host.count_account_dependents(account_id)) == {
-                key: 0 for key in before_counts
-            }
+            assert dict(host.count_account_dependents(account_id)) == {key: 0 for key in before_counts}
 
             audits = host.audit_rows(account_id)
             assert [row.action for row in audits] == [
@@ -500,9 +498,7 @@ def check_operator_target_guards(host: ConformanceHost) -> None:
             created_account_ids.append(superadmin.id)
             headers = _headers(host, manager.id)
             _assert_status(
-                client.patch(
-                    f"{collection}/{normal.id}", headers=headers, json={"email": "allowed@example.com"}
-                ),
+                client.patch(f"{collection}/{normal.id}", headers=headers, json={"email": "allowed@example.com"}),
                 200,
             )
             _assert_status(client.patch(f"{collection}/{normal.id}", headers=headers, json={"isAdmin": True}), 422)
@@ -555,9 +551,7 @@ def check_expiry_catalog_and_sso_visibility(host: ConformanceHost) -> None:
                 expires_at=datetime.now(UTC) - timedelta(minutes=1),
             )
             created_account_ids.append(expired.id)
-            external = host.create_raw_account(
-                username=f"conformance-sso-{suffix}", password=None, external=True
-            )
+            external = host.create_raw_account(username=f"conformance-sso-{suffix}", password=None, external=True)
             created_account_ids.append(external.id)
             # 宿主 lifespan 可能会同步/重建目录，测试行必须在真实启动流程完成后写入。
             host.add_catalog_permission(code=managed_code, supported_scopes=["MANAGED_USERS"])
@@ -675,9 +669,7 @@ def check_live_login_eligibility(host: ConformanceHost) -> None:
 
     with TestClient(host.app) as client:
         try:
-            normal = host.create_raw_account(
-                username=f"conformance-login-{suffix}", password=password
-            )
+            normal = host.create_raw_account(username=f"conformance-login-{suffix}", password=password)
             created_account_ids.append(normal.id)
             admin = host.create_raw_account(
                 username=f"conformance-login-admin-{suffix}", password=password, is_admin=True

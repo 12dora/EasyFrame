@@ -127,9 +127,7 @@ def test_manifest_keeps_v1_domain_group_projection(monkeypatch) -> None:
 
     target = FRAMEWORK_PERMISSIONS[0]
     permissions = tuple(
-        permission.model_copy(update={"group_key": "accounts.local"})
-        if permission.code == target.code
-        else permission
+        permission.model_copy(update={"group_key": "accounts.local"}) if permission.code == target.code else permission
         for permission in FRAMEWORK_PERMISSIONS
     )
     monkeypatch.setattr(

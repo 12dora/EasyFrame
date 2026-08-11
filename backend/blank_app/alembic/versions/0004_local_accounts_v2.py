@@ -6,7 +6,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import sqlalchemy as sa
-
 from alembic import op
 
 revision = "0004_local_accounts_v2"
@@ -33,9 +32,7 @@ def upgrade_local_permissions(value: object, catalog_scopes: Mapping[str, object
     if not isinstance(value, list):
         return value
     return [
-        {"code": item, "scope": _preferred_local_scope(catalog_scopes.get(item))}
-        if isinstance(item, str)
-        else item
+        {"code": item, "scope": _preferred_local_scope(catalog_scopes.get(item))} if isinstance(item, str) else item
         for item in value
     ]
 
@@ -45,12 +42,7 @@ def downgrade_local_permissions(value: object) -> object:
 
     if not isinstance(value, list):
         return value
-    return [
-        item["code"]
-        if isinstance(item, dict) and isinstance(item.get("code"), str)
-        else item
-        for item in value
-    ]
+    return [item["code"] if isinstance(item, dict) and isinstance(item.get("code"), str) else item for item in value]
 
 
 def _transform_local_permissions(*, downgrade: bool = False) -> None:
@@ -65,12 +57,8 @@ def _transform_local_permissions(*, downgrade: bool = False) -> None:
         sa.column("supported_scopes", sa.JSON()),
     )
     connection = op.get_bind()
-    catalog_scopes = dict(
-        connection.execute(sa.select(catalog.c.code, catalog.c.supported_scopes)).all()
-    )
-    for account_id, permissions in connection.execute(
-        sa.select(accounts.c.id, accounts.c.local_permissions)
-    ):
+    catalog_scopes = dict(connection.execute(sa.select(catalog.c.code, catalog.c.supported_scopes)).all())
+    for account_id, permissions in connection.execute(sa.select(accounts.c.id, accounts.c.local_permissions)):
         transformed: Any = (
             downgrade_local_permissions(permissions)
             if downgrade
@@ -78,9 +66,7 @@ def _transform_local_permissions(*, downgrade: bool = False) -> None:
         )
         if transformed != permissions:
             connection.execute(
-                sa.update(accounts)
-                .where(accounts.c.id == account_id)
-                .values(local_permissions=transformed)
+                sa.update(accounts).where(accounts.c.id == account_id).values(local_permissions=transformed)
             )
 
 
@@ -108,11 +94,7 @@ def upgrade() -> None:
         "platform_permission_catalog",
         sa.column("risk_level", sa.String()),
     )
-    op.execute(
-        sa.update(catalog)
-        .where(catalog.c.risk_level.notin_(("standard", "high")))
-        .values(risk_level="high")
-    )
+    op.execute(sa.update(catalog).where(catalog.c.risk_level.notin_(("standard", "high"))).values(risk_level="high"))
     op.create_check_constraint(
         "ck_platform_permission_catalog_risk_level",
         "platform_permission_catalog",

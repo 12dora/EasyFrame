@@ -239,7 +239,11 @@ def seed_default_admin() -> None:
         if mode in {"enabled", "break_glass"}:
             now = datetime.now(UTC)
             if configured is not None:
-                if account_is_eligible(configured, now=now) and configured.external_source is None and configured.is_admin:
+                if (
+                    account_is_eligible(configured, now=now)
+                    and configured.external_source is None
+                    and configured.is_admin
+                ):
                     return
                 raise RuntimeError("configured bootstrap username is not a usable local superadmin")
             usable_admin = (
@@ -369,9 +373,7 @@ class BlankAccountAdapter:
     def authenticate_password(self, username: str, password: str) -> LocalAccount | None:
         with SessionLocal() as db:
             account = (
-                db.query(Account)
-                .filter(Account.username == username, Account.external_source.is_(None))
-                .one_or_none()
+                db.query(Account).filter(Account.username == username, Account.external_source.is_(None)).one_or_none()
             )
             candidate_hash = (
                 account.password_hash if account is not None and account.password_hash else TIMING_EQUALIZER_HASH
