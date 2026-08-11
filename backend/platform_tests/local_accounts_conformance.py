@@ -492,6 +492,12 @@ def check_operator_target_guards(host: ConformanceHost) -> None:
                 is_admin=True,
             )
             created_account_ids.append(target_admin.id)
+            superadmin = host.create_raw_account(
+                username=f"conformance-superadmin-{suffix}",
+                password="Conformance-superadmin-password-42!",
+                is_admin=True,
+            )
+            created_account_ids.append(superadmin.id)
             headers = _headers(host, manager.id)
             _assert_status(
                 client.patch(
@@ -510,10 +516,18 @@ def check_operator_target_guards(host: ConformanceHost) -> None:
                     403,
                 )
             _assert_status(client.patch(f"{collection}/{manager.id}", headers=headers, json={"active": False}), 403)
-            with host.only_usable_admin(target_admin.id):
+            # A delegated actor is rejected before the invariant is evaluated. Use a
+            # real local superadmin and make it the sole usable admin, then demote a
+            # second admin: a broken usable_local_admin_count (for example, always 0)
+            # now fails this request instead of being masked by the delegated guard.
+            with host.only_usable_admin(superadmin.id):
                 _assert_status(
-                    client.patch(f"{collection}/{target_admin.id}", headers=headers, json={"isAdmin": False}),
-                    422,
+                    client.patch(
+                        f"{collection}/{target_admin.id}",
+                        headers=_headers(host, superadmin.id),
+                        json={"isAdmin": False},
+                    ),
+                    200,
                 )
         finally:
             try:
