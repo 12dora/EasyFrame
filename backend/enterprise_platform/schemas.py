@@ -145,6 +145,8 @@ class CurrentUser(PlatformModel):
     """当前主体；permissions 是 code 兼容投影，grants 用于 scope 判定。"""
 
     id: str
+    account_id: str | None = None
+    is_local_superadmin: bool = False
     name: str
     email: str | None = None
     avatar_url: str | None = None

@@ -9,6 +9,20 @@ from enterprise_platform.ports import AccountPort, LocalAccount, PasskeyChalleng
 
 REQUIRE_SECOND_FACTOR_CODE = "REQUIRE_SECOND_FACTOR"
 
+# bootstrap 级机密的公共示例标记与弱值黑名单唯一实现:超管口令(seed/重置/自助改密)
+# 与签名密钥门禁共用,宿主不得另行维护副本(06 §2)。
+PUBLIC_SECRET_MARKERS = ("replace-with-", "change-before-deploy", "changeme")
+_WEAK_BOOTSTRAP_VALUES = {"admin123", "password", "secret"}
+
+
+def is_unsafe_bootstrap_secret(value: str, *, min_length: int) -> bool:
+    lowered = value.strip().lower()
+    return (
+        len(value) < min_length
+        or lowered in _WEAK_BOOTSTRAP_VALUES
+        or any(marker in lowered for marker in PUBLIC_SECRET_MARKERS)
+    )
+
 
 # 异常类不能用 frozen=True:Python 3.11 的 contextlib 在把异常穿过生成器式
 # @contextmanager 时会执行 `exc.__traceback__ = traceback`(contextlib.py:167/179/191),

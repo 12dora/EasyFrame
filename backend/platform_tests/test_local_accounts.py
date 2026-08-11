@@ -90,13 +90,19 @@ def test_local_accounts_crud_permissions_audit_and_guards() -> None:
                 "email": f"{username}@example.com",
                 "password": password,
                 "mustChangePassword": False,
-                "permissions": ["accounts.local.view", "settings.app_setting.update"],
+                "permissions": [
+                    {"code": "accounts.local.view", "scope": "ALL"},
+                    {"code": "settings.app_setting.update", "scope": "ALL"},
+                ],
             },
         )
         assert create.status_code == 201, create.json()
         created = create.json()
         account_id = created["id"]
-        assert created["permissions"] == ["accounts.local.view", "settings.app_setting.update"]
+        assert created["permissions"] == [
+            {"code": "accounts.local.view", "scope": "ALL"},
+            {"code": "settings.app_setting.update", "scope": "ALL"},
+        ]
         with SessionLocal() as db:
             stored = db.get(Account, uuid.UUID(account_id))
             assert stored is not None
@@ -186,15 +192,21 @@ def test_local_accounts_crud_permissions_audit_and_guards() -> None:
         permission_update = client.put(
             f"/api/v1/local-accounts/{account_id}/permissions",
             headers=headers,
-            json={"permissions": ["accounts.local.manage"]},
+            json={
+                "permissions": [{"code": "accounts.local.manage", "scope": "ALL"}],
+                "expectedVersion": created["localGrantsVersion"],
+            },
         )
         assert permission_update.status_code == 200
-        assert permission_update.json()["permissions"] == ["accounts.local.manage"]
+        assert permission_update.json()["permissions"] == [{"code": "accounts.local.manage", "scope": "ALL"}]
 
         unknown_permissions = client.put(
             f"/api/v1/local-accounts/{account_id}/permissions",
             headers=headers,
-            json={"permissions": ["no.such.permission"]},
+            json={
+                "permissions": [{"code": "no.such.permission", "scope": "ALL"}],
+                "expectedVersion": permission_update.json()["localGrantsVersion"],
+            },
         )
         assert unknown_permissions.status_code == 422
 
@@ -210,7 +222,10 @@ def test_local_accounts_crud_permissions_audit_and_guards() -> None:
         write_permissions_on_admin = client.put(
             f"/api/v1/local-accounts/{account_id}/permissions",
             headers=headers,
-            json={"permissions": ["accounts.local.view"]},
+            json={
+                "permissions": [{"code": "accounts.local.view", "scope": "ALL"}],
+                "expectedVersion": admin_permissions.json()["localGrantsVersion"],
+            },
         )
         assert write_permissions_on_admin.status_code == 422
 
@@ -322,7 +337,7 @@ def test_local_account_create_validates_password_and_admin_grants() -> None:
                 "username": f"admin-grants-{uuid.uuid4().hex[:8]}",
                 "password": "Admin-password-42!",
                 "isAdmin": True,
-                "permissions": ["accounts.local.view"],
+                "permissions": [{"code": "accounts.local.view", "scope": "ALL"}],
             },
         )
         assert admin_grants.status_code == 422
@@ -361,7 +376,7 @@ def test_local_accounts_self_and_last_admin_guards() -> None:
             headers=manager_headers,
             json={"active": False},
         )
-        assert last_admin_deactivate.status_code == 422
+        assert last_admin_deactivate.status_code == 403
 
         last_admin_demote = client.patch(
             f"/api/v1/local-accounts/{admin_id}",
@@ -371,7 +386,7 @@ def test_local_accounts_self_and_last_admin_guards() -> None:
         assert last_admin_demote.status_code == 422
 
         last_admin_delete = client.delete(f"/api/v1/local-accounts/{admin_id}", headers=manager_headers)
-        assert last_admin_delete.status_code == 422
+        assert last_admin_delete.status_code == 403
 
 
 def test_local_accounts_catalog_and_manifest_include_new_codes() -> None:
@@ -412,7 +427,7 @@ def test_local_accounts_catalog_and_manifest_include_new_codes() -> None:
         (
             "PUT",
             "/api/v1/local-accounts/{account_id}/permissions",
-            {"permissions": ["accounts.local.view"]},
+            {"permissions": [{"code": "accounts.local.view", "scope": "ALL"}], "expectedVersion": 0},
             False,
         ),
         ("DELETE", "/api/v1/local-accounts/{account_id}/totp", None, False),
@@ -466,7 +481,7 @@ def test_local_accounts_permission_matrix(
         (
             "PUT",
             "/api/v1/local-accounts/{account_id}/permissions",
-            {"permissions": ["accounts.local.view"]},
+            {"permissions": [{"code": "accounts.local.view", "scope": "ALL"}], "expectedVersion": 0},
         ),
         ("DELETE", "/api/v1/local-accounts/{account_id}/totp", None),
     ],
@@ -537,36 +552,48 @@ def test_local_account_grants_reject_inactive_codes_and_do_not_store_baseline() 
                 "username": f"baseline-{suffix}",
                 "password": "Baseline-password-42!",
                 "mustChangePassword": False,
-                "permissions": ["auth.totp.create", "accounts.local.view"],
+                "permissions": [
+                    {"code": "auth.totp.create", "scope": "SELF"},
+                    {"code": "accounts.local.view", "scope": "ALL"},
+                ],
             },
         )
         assert create.status_code == 201, create.json()
         account_id = create.json()["id"]
-        assert create.json()["permissions"] == ["accounts.local.view"]
+        assert create.json()["permissions"] == [{"code": "accounts.local.view", "scope": "ALL"}]
         assert create.json()["permissionCount"] == 1
 
         detail = client.get(f"/api/v1/local-accounts/{account_id}", headers=headers)
         assert detail.status_code == 200
-        assert detail.json()["permissions"] == ["accounts.local.view"]
+        assert detail.json()["permissions"] == [{"code": "accounts.local.view", "scope": "ALL"}]
         assert "auth.totp.create" in detail.json()["baselinePermissions"]
 
         update = client.put(
             f"/api/v1/local-accounts/{account_id}/permissions",
             headers=headers,
-            json={"permissions": ["auth.passkey.view", "accounts.local.manage"]},
+            json={
+                "permissions": [
+                    {"code": "auth.passkey.view", "scope": "SELF"},
+                    {"code": "accounts.local.manage", "scope": "ALL"},
+                ],
+                "expectedVersion": create.json()["localGrantsVersion"],
+            },
         )
         assert update.status_code == 200
-        assert update.json()["permissions"] == ["accounts.local.manage"]
+        assert update.json()["permissions"] == [{"code": "accounts.local.manage", "scope": "ALL"}]
         assert update.json()["permissionCount"] == 1
 
         updated_detail = client.get(f"/api/v1/local-accounts/{account_id}", headers=headers)
         assert updated_detail.status_code == 200
-        assert updated_detail.json()["permissions"] == ["accounts.local.manage"]
+        assert updated_detail.json()["permissions"] == [{"code": "accounts.local.manage", "scope": "ALL"}]
 
         inactive = client.put(
             f"/api/v1/local-accounts/{account_id}/permissions",
             headers=headers,
-            json={"permissions": [inactive_code]},
+            json={
+                "permissions": [{"code": inactive_code, "scope": "ALL"}],
+                "expectedVersion": update.json()["localGrantsVersion"],
+            },
         )
         assert inactive.status_code == 422
 
@@ -589,12 +616,23 @@ def test_local_account_permission_catalog_is_full_and_available_to_view_only_acc
         assert response.status_code == 200
         items = response.json()["data"]
         assert items
-        assert all(item["active"] is True for item in items)
-        assert all(item["code"] and item["domain"] and item["resource"] for item in items)
-        assert all(set(item) == {"code", "domain", "resource", "riskLevel", "active"} for item in items)
+        assert all(item["code"] and item["nameZh"] and item["nameEn"] and item["groupKey"] for item in items)
+        assert all(
+            set(item)
+            == {
+                "code",
+                "nameZh",
+                "nameEn",
+                "groupKey",
+                "riskLevel",
+                "supportedScopes",
+                "grantableScopes",
+            }
+            for item in items
+        )
         local_view = next(item for item in items if item["code"] == "accounts.local.view")
-        assert local_view["domain"] == "accounts"
-        assert local_view["resource"] == "accounts.local"
+        assert local_view["groupKey"] == "accounts"
+        assert local_view["grantableScopes"] == ["ALL"]
 
         integration_catalog = client.get("/api/v1/authz-integration/permission-catalog", headers=headers)
         assert integration_catalog.status_code == 403
