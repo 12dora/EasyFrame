@@ -14,6 +14,8 @@ const sampleAccounts = {
       passkeyCount: 0,
       mustChangePassword: false,
       permissionCount: 2,
+      expiresAt: null,
+      expired: false,
       createdAt: "2026-01-01T00:00:00Z",
     },
     {
@@ -26,70 +28,112 @@ const sampleAccounts = {
       passkeyCount: 1,
       mustChangePassword: true,
       permissionCount: 0,
+      expiresAt: null,
+      expired: false,
       createdAt: "2026-01-01T00:00:00Z",
     },
+    {
+      id: "acc-expired",
+      username: "expired-user",
+      email: "expired@example.com",
+      active: true,
+      isAdmin: false,
+      totpEnabled: false,
+      passkeyCount: 0,
+      mustChangePassword: false,
+      permissionCount: 1,
+      expiresAt: "2020-01-01T00:00:00Z",
+      expired: true,
+      createdAt: "2019-01-01T00:00:00Z",
+    },
   ],
-  meta: { total: 2 },
+  meta: { total: 3 },
 };
 
-/** Shape matches GET /api/v1/local-accounts/permission-catalog. */
+/** Shape matches GET /api/v1/local-accounts/permission-catalog (v2). */
 const sampleCatalog = {
   data: [
     {
       code: "accounts.local.view",
-      domain: "accounts",
-      resource: "accounts.local",
+      nameZh: "查看本地账户",
+      nameEn: "View local accounts",
+      groupKey: "accounts",
       riskLevel: "standard",
-      active: true,
+      supportedScopes: ["ALL"],
+      grantableScopes: ["ALL"],
     },
     {
       code: "accounts.local.manage",
-      domain: "accounts",
-      resource: "accounts.local",
+      nameZh: "管理本地账户",
+      nameEn: "Manage local accounts",
+      groupKey: "accounts",
       riskLevel: "high",
-      active: true,
+      supportedScopes: ["ALL"],
+      grantableScopes: ["ALL"],
     },
     {
       code: "ops.upstream_health.view",
-      domain: "ops",
-      resource: "ops.upstream_health",
+      nameZh: "上游健康查看",
+      nameEn: "Upstream health view",
+      groupKey: "ops",
       riskLevel: "standard",
-      active: true,
+      supportedScopes: ["SELF", "ALL"],
+      grantableScopes: ["SELF", "ALL"],
     },
     {
       code: "auth.totp.create",
-      domain: "auth",
-      resource: "auth.totp",
+      nameZh: "创建 TOTP",
+      nameEn: "Create TOTP",
+      groupKey: "auth",
       riskLevel: "standard",
-      active: true,
+      supportedScopes: ["SELF"],
+      grantableScopes: ["SELF"],
     },
     {
       code: "auth.totp.advance",
-      domain: "auth",
-      resource: "auth.totp",
+      nameZh: "管理 TOTP",
+      nameEn: "Advance TOTP",
+      groupKey: "auth",
       riskLevel: "standard",
-      active: true,
+      supportedScopes: ["SELF"],
+      grantableScopes: ["SELF"],
     },
     {
       code: "auth.passkey.view",
-      domain: "auth",
-      resource: "auth.passkey",
+      nameZh: "查看通行密钥",
+      nameEn: "View passkeys",
+      groupKey: "auth",
       riskLevel: "standard",
-      active: true,
+      supportedScopes: ["SELF"],
+      grantableScopes: ["SELF"],
     },
     {
       code: "auth.passkey.create",
-      domain: "auth",
-      resource: "auth.passkey",
+      nameZh: "创建通行密钥",
+      nameEn: "Create passkeys",
+      groupKey: "auth",
       riskLevel: "standard",
-      active: true,
+      supportedScopes: ["SELF"],
+      grantableScopes: ["SELF"],
     },
     {
       code: "notification.center.view",
-      domain: "notification",
-      resource: "notification.center",
+      nameZh: "通知中心",
+      nameEn: "Notification center",
+      groupKey: "notification",
       riskLevel: "standard",
-      active: true,
+      supportedScopes: ["SELF"],
+      grantableScopes: ["SELF"],
+    },
+    // Empty grantableScopes ⇒ not grantable to local users (greyed + note).
+    {
+      code: "system.internal.metric",
+      nameZh: "内部指标",
+      nameEn: "Internal metric",
+      groupKey: "system",
+      riskLevel: "standard",
+      supportedScopes: ["SELF"],
+      grantableScopes: [],
     },
   ],
 };
@@ -124,11 +168,27 @@ const delegatedManagerPermissions = ["accounts.local.view", "accounts.local.mana
 
 type CapturedMutation = { method: string; path: string; body: unknown };
 
-async function mockPlatform(
-  page: Page,
-  permissions: string[] = fullPermissions,
-  captured: CapturedMutation[] = [],
-) {
+type MockPlatformOptions = {
+  permissions?: string[];
+  captured?: CapturedMutation[];
+  accountId?: string;
+  isLocalSuperadmin?: boolean;
+  forcePermissionsConflict?: boolean;
+};
+
+async function mockPlatform(page: Page, options: MockPlatformOptions | string[] = fullPermissions) {
+  const opts: MockPlatformOptions = Array.isArray(options)
+    ? { permissions: options, captured: [] }
+    : options;
+  const permissions = opts.permissions ?? fullPermissions;
+  const captured = opts.captured ?? [];
+  const accountId = opts.accountId ?? "acc-admin";
+  const isLocalSuperadmin = opts.isLocalSuperadmin ?? true;
+  let grantsVersion = 3;
+  // 409 is single-shot: after the conflict the server version advances so the
+  // next PUT can succeed with the reloaded expectedVersion.
+  let pendingPermissionsConflict = Boolean(opts.forcePermissionsConflict);
+
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -145,6 +205,8 @@ async function mockPlatform(
         avatarUrl: null,
         hasLocalPassword: true,
         permissions,
+        accountId,
+        isLocalSuperadmin,
         securityCapabilities: {
           passwordChange: true,
           totpStatus: true,
@@ -185,7 +247,7 @@ async function mockPlatform(
       const payload = (body ?? {}) as {
         username?: string;
         email?: string | null;
-        permissions?: string[];
+        permissions?: Array<{ code: string; scope: string }>;
       };
       return json(
         {
@@ -198,10 +260,13 @@ async function mockPlatform(
           passkeyCount: 0,
           mustChangePassword: true,
           permissionCount: Array.isArray(payload.permissions) ? payload.permissions.length : 0,
+          expiresAt: null,
+          expired: false,
           createdAt: "2026-01-02T00:00:00Z",
           uiLocale: "zh-CN",
           permissions: payload.permissions ?? [],
           baselinePermissions: [...BASELINE_CODES],
+          localGrantsVersion: 0,
         },
         201,
       );
@@ -221,13 +286,24 @@ async function mockPlatform(
           body = {};
         }
         captured.push({ method, path, body });
-        const payload = (body ?? {}) as { permissions?: string[] };
+        if (pendingPermissionsConflict) {
+          pendingPermissionsConflict = false;
+          // Concurrent writer advanced the version; reload must pick this up.
+          grantsVersion += 1;
+          return json({ detail: "version conflict" }, 409);
+        }
+        const payload = (body ?? {}) as {
+          permissions?: Array<{ code: string; scope: string }>;
+          expectedVersion?: number;
+        };
+        grantsVersion += 1;
         const summary = sampleAccounts.data.find((row) => row.id === id) ?? sampleAccounts.data[0];
         return json({
           ...summary,
           uiLocale: "zh-CN",
           permissions: payload.permissions ?? [],
           baselinePermissions: [...BASELINE_CODES],
+          localGrantsVersion: grantsVersion,
         });
       }
 
@@ -239,12 +315,19 @@ async function mockPlatform(
         return json({
           ...summary,
           uiLocale: "zh-CN",
-          permissions: ["ops.upstream_health.view"],
+          permissions: [{ code: "ops.upstream_health.view", scope: "ALL" }],
           baselinePermissions: [...BASELINE_CODES],
+          localGrantsVersion: grantsVersion,
         });
       }
 
-      if (method === "PATCH" || method === "DELETE") {
+      if (method === "DELETE") {
+        captured.push({ method, path, body: null });
+        // Contract: 204 No Content (empty body).
+        return route.fulfill({ status: 204, body: "" });
+      }
+
+      if (method === "PATCH") {
         captured.push({ method, path, body: safeBody(request) });
         return json({ ok: true });
       }
@@ -252,6 +335,8 @@ async function mockPlatform(
 
     return json({});
   });
+
+  return { captured };
 }
 
 function safeBody(request: Request): unknown {
@@ -298,17 +383,20 @@ async function checkGrantCheckbox(page: Page, testId: string) {
 for (const locale of locales) {
   test.describe(`local accounts (${locale})`, () => {
     test("nav entry is hidden without accounts.local.view", async ({ page }) => {
-      await mockPlatform(page, [
-        "identity.integration.view",
-        "authz.integration.view",
-        "ops.upstream_health.view",
-        "settings.app_setting.update",
-        "auth.totp.create",
-        "auth.totp.advance",
-        "auth.passkey.view",
-        "auth.passkey.create",
-        "notification.center.view",
-      ]);
+      await mockPlatform(page, {
+        permissions: [
+          "identity.integration.view",
+          "authz.integration.view",
+          "ops.upstream_health.view",
+          "settings.app_setting.update",
+          "auth.totp.create",
+          "auth.totp.advance",
+          "auth.passkey.view",
+          "auth.passkey.create",
+          "notification.center.view",
+        ],
+        isLocalSuperadmin: false,
+      });
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.goto(`/${locale}/app/settings/access`);
       const accountsHref = `/${locale}/app/settings/accounts`;
@@ -327,6 +415,16 @@ for (const locale of locales) {
       await expect(page.getByText("framework-admin", { exact: true })).toBeVisible();
       const accountsLabel = locale === "en" ? "Local accounts" : "本地账户";
       await expect(page.getByRole("heading", { name: accountsLabel })).toBeVisible();
+    });
+
+    test("expired badge renders for expired accounts", async ({ page }) => {
+      await mockPlatform(page);
+      await page.goto(`/${locale}/app/settings/accounts`);
+      await expect(page.locator('[data-test-id="local-accounts-expired-acc-expired"]')).toBeVisible();
+      const expiredLabel = locale === "en" ? "Expired" : "已过期";
+      await expect(page.locator('[data-test-id="local-accounts-expired-acc-expired"]')).toContainText(
+        expiredLabel,
+      );
     });
 
     test("create modal opens and random-password button fills a policy-compliant value", async ({ page }) => {
@@ -355,8 +453,135 @@ for (const locale of locales) {
       await expect(page.getByText("ops.upstream_health.view", { exact: false }).first()).toBeVisible();
     });
 
+    test("scope select appears only for multi-scope codes", async ({ page }) => {
+      await mockPlatform(page);
+      await page.goto(`/${locale}/app/settings/accounts`);
+      await page.locator('[data-test-id="local-accounts-create-btn"]').click();
+      await waitForPermissionPickerReady(page);
+
+      // Multi-scope: ops.upstream_health.view has SELF+ALL → scope select after check.
+      await checkGrantCheckbox(page, "local-accounts-perm-ops.upstream_health.view");
+      await expect(page.locator('[data-test-id="local-accounts-perm-scope-ops.upstream_health.view"]')).toBeVisible();
+
+      // Single-scope: accounts.local.view has only ALL → no scope control.
+      await checkGrantCheckbox(page, "local-accounts-perm-accounts.local.view");
+      await expect(page.locator('[data-test-id="local-accounts-perm-scope-accounts.local.view"]')).toHaveCount(0);
+    });
+
+    test("non-superadmin cannot see isAdmin switch/expiry and high codes disabled", async ({ page }) => {
+      await mockPlatform(page, {
+        permissions: delegatedManagerPermissions,
+        isLocalSuperadmin: false,
+        accountId: "acc-delegate",
+      });
+      await page.goto(`/${locale}/app/settings/accounts`);
+      await page.locator('[data-test-id="local-accounts-create-btn"]').click();
+      await waitForPermissionPickerReady(page);
+
+      await expect(page.locator('[data-test-id="local-accounts-create-is-admin"]')).toHaveCount(0);
+      await expect(page.locator('[data-test-id="local-accounts-create-expires-at"]')).toHaveCount(0);
+
+      const high = page.locator('[data-test-id="local-accounts-perm-accounts.local.manage"] input[type="checkbox"]');
+      await expect(high).toBeVisible();
+      await expect(high).toBeDisabled();
+      await expect(page.locator('[data-test-id="local-accounts-perm-high-accounts.local.manage"]')).toBeVisible();
+    });
+
+    test("self-row action lockout disables dangerous controls", async ({ page }) => {
+      await mockPlatform(page, {
+        permissions: fullPermissions,
+        isLocalSuperadmin: true,
+        accountId: "acc-1",
+      });
+      await page.goto(`/${locale}/app/settings/accounts`);
+      await page.locator('[data-test-id="local-accounts-open-acc-1"]').click();
+      await expect(page.locator('[data-test-id="local-accounts-edit-drawer"]')).toBeVisible();
+
+      await expect(page.locator('[data-test-id="local-accounts-toggle-active"]')).toBeDisabled();
+      await expect(page.locator('[data-test-id="local-accounts-delete"]')).toBeDisabled();
+      await expect(page.locator('[data-test-id="local-accounts-reset-password-submit"]')).toBeDisabled();
+      await expect(page.locator('[data-test-id="local-accounts-disable-totp"]')).toBeDisabled();
+    });
+
+    test("409 conflict path shows the conflict message, reloads detail, and retries with fresh expectedVersion", async ({
+      page,
+    }) => {
+      const captured: CapturedMutation[] = [];
+      await mockPlatform(page, {
+        permissions: fullPermissions,
+        isLocalSuperadmin: true,
+        captured,
+        forcePermissionsConflict: true,
+      });
+      await page.goto(`/${locale}/app/settings/accounts`);
+      await page.locator('[data-test-id="local-accounts-open-acc-1"]').click();
+      await expect(page.locator('[data-test-id="local-accounts-edit-drawer"]')).toBeVisible();
+      await waitForPermissionPickerReady(page);
+
+      await checkGrantCheckbox(page, "local-accounts-perm-accounts.local.view");
+      await page.locator('[data-test-id="local-accounts-save-permissions"]').click();
+
+      await expect(page.locator('[data-test-id="local-accounts-grants-conflict"]')).toBeVisible();
+      const conflictLabel =
+        locale === "en"
+          ? "Grants were modified by someone else"
+          : "授权已被他人修改";
+      await expect(page.locator('[data-test-id="local-accounts-grants-conflict"]')).toContainText(conflictLabel);
+
+      // First PUT used the original version; conflict advanced the server to 4
+      // and loadDetail reloaded it. Next save must carry expectedVersion: 4.
+      await expect
+        .poll(() =>
+          captured.filter(
+            (item) => item.method === "PUT" && item.path === "/api/v1/local-accounts/acc-1/permissions",
+          ).length,
+        )
+        .toBe(1);
+      const firstPut = captured.find(
+        (item) => item.method === "PUT" && item.path === "/api/v1/local-accounts/acc-1/permissions",
+      );
+      expect((firstPut!.body as { expectedVersion?: number }).expectedVersion).toBe(3);
+
+      await page.locator('[data-test-id="local-accounts-save-permissions"]').click();
+      await expect
+        .poll(() =>
+          captured.filter(
+            (item) => item.method === "PUT" && item.path === "/api/v1/local-accounts/acc-1/permissions",
+          ).length,
+        )
+        .toBe(2);
+      const puts = captured.filter(
+        (item) => item.method === "PUT" && item.path === "/api/v1/local-accounts/acc-1/permissions",
+      );
+      expect((puts[1]!.body as { expectedVersion?: number }).expectedVersion).toBe(4);
+    });
+
+    test("zero-grantableScopes catalog row is disabled with not-grantable note", async ({ page }) => {
+      await mockPlatform(page);
+      await page.goto(`/${locale}/app/settings/accounts`);
+      await page.locator('[data-test-id="local-accounts-create-btn"]').click();
+      await waitForPermissionPickerReady(page);
+
+      const checkbox = page.locator(
+        '[data-test-id="local-accounts-perm-system.internal.metric"] input[type="checkbox"]',
+      );
+      await expect(checkbox).toBeVisible();
+      await expect(checkbox).toBeDisabled();
+      await expect(
+        page.locator('[data-test-id="local-accounts-perm-not-grantable-system.internal.metric"]'),
+      ).toBeVisible();
+      const notGrantableLabel = locale === "en" ? "Not grantable to local users" : "不可授予本地用户";
+      await expect(
+        page.locator('[data-test-id="local-accounts-perm-not-grantable-system.internal.metric"]'),
+      ).toContainText(notGrantableLabel);
+    });
+
     test("delegated manager with only accounts.local.* loads page and catalog", async ({ page }) => {
-      await mockPlatform(page, delegatedManagerPermissions);
+      await mockPlatform(page, {
+        permissions: delegatedManagerPermissions,
+        isLocalSuperadmin: false,
+        accountId: "acc-delegate",
+      });
       await page.goto(`/${locale}/app/settings/accounts`);
       await expect(page.locator('[data-test-id="enterprise-local-accounts"]')).toBeVisible();
       await expect(page.locator('[data-test-id="local-accounts-table"]')).toBeVisible();
@@ -380,9 +605,13 @@ for (const locale of locales) {
       }
     });
 
-    test("create POST and permission PUT exclude baseline codes", async ({ page }) => {
+    test("create POST and permission PUT exclude baseline codes and use LocalGrant shape", async ({ page }) => {
       const captured: CapturedMutation[] = [];
-      await mockPlatform(page, delegatedManagerPermissions, captured);
+      await mockPlatform(page, {
+        permissions: fullPermissions,
+        isLocalSuperadmin: true,
+        captured,
+      });
       await page.goto(`/${locale}/app/settings/accounts`);
 
       // ── Create ──────────────────────────────────────────────────────────
@@ -395,17 +624,21 @@ for (const locale of locales) {
       await checkGrantCheckbox(page, "local-accounts-perm-ops.upstream_health.view");
 
       await page.locator('[data-test-id="local-accounts-create-submit"]').click();
+      // Receipt modal after successful create.
+      await expect(page.locator('[data-test-id="local-accounts-password-receipt"]')).toBeVisible();
+      await page.locator('[data-test-id="local-accounts-password-receipt-confirm"]').click();
+
       await expect
         .poll(() => captured.some((item) => item.method === "POST" && item.path === "/api/v1/local-accounts"))
         .toBe(true);
 
       const createReq = captured.find((item) => item.method === "POST" && item.path === "/api/v1/local-accounts");
       expect(createReq).toBeTruthy();
-      const createBody = createReq!.body as { permissions?: string[] };
+      const createBody = createReq!.body as { permissions?: Array<{ code: string; scope: string }> };
       expect(Array.isArray(createBody.permissions)).toBe(true);
-      expect(createBody.permissions).toContain("ops.upstream_health.view");
+      expect(createBody.permissions?.some((g) => g.code === "ops.upstream_health.view")).toBe(true);
       for (const code of BASELINE_CODES) {
-        expect(createBody.permissions).not.toContain(code);
+        expect(createBody.permissions?.some((g) => g.code === code)).toBe(false);
       }
 
       // ── Edit + save permissions ─────────────────────────────────────────
@@ -436,13 +669,17 @@ for (const locale of locales) {
         (item) => item.method === "PUT" && item.path === "/api/v1/local-accounts/acc-1/permissions",
       );
       expect(putReq).toBeTruthy();
-      const putBody = putReq!.body as { permissions?: string[] };
+      const putBody = putReq!.body as {
+        permissions?: Array<{ code: string; scope: string }>;
+        expectedVersion?: number;
+      };
       expect(Array.isArray(putBody.permissions)).toBe(true);
+      expect(typeof putBody.expectedVersion).toBe("number");
       // Detail mock starts with ops.upstream_health.view already granted.
-      expect(putBody.permissions).toContain("ops.upstream_health.view");
-      expect(putBody.permissions).toContain("accounts.local.manage");
+      expect(putBody.permissions?.some((g) => g.code === "ops.upstream_health.view")).toBe(true);
+      expect(putBody.permissions?.some((g) => g.code === "accounts.local.manage")).toBe(true);
       for (const code of BASELINE_CODES) {
-        expect(putBody.permissions).not.toContain(code);
+        expect(putBody.permissions?.some((g) => g.code === code)).toBe(false);
       }
     });
   });

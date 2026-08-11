@@ -7,9 +7,10 @@ import type {
   LocalAccountListResult,
   LocalAccountsPermissionCatalogItem,
   ResetLocalAccountPasswordInput,
+  SetLocalAccountPermissionsInput,
   UpdateLocalAccountInput,
 } from "@easy-enterprise/ui/enterprise-local-accounts";
-import { platformRequest } from "./platform-api";
+import { PlatformRequestError, platformRequest } from "./platform-api";
 
 /**
  * Implicit self-service codes for every local account (contract BASELINE_SELF_SERVICE).
@@ -22,6 +23,8 @@ export const LOCAL_ACCOUNT_BASELINE_PERMISSIONS = [
   "auth.passkey.create",
   "notification.center.view",
 ] as const;
+
+export { PlatformRequestError };
 
 export const localAccountsAdapter: EnterpriseLocalAccountsAdapter = {
   listAccounts: (params) => {
@@ -40,11 +43,13 @@ export const localAccountsAdapter: EnterpriseLocalAccountsAdapter = {
         mustChangePassword: input.mustChangePassword ?? true,
         isAdmin: input.isAdmin ?? false,
         permissions: input.permissions ?? [],
+        ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
       }),
     }),
   updateAccount: (id, patch: UpdateLocalAccountInput) =>
     platformRequest<LocalAccountDetail>(`/api/v1/local-accounts/${encodeURIComponent(id)}`, {
       method: "PATCH",
+      // Preserve tri-state expiresAt: omit / null / value (JSON.stringify keeps null).
       body: JSON.stringify(patch),
     }),
   deleteAccount: (id) =>
@@ -57,10 +62,13 @@ export const localAccountsAdapter: EnterpriseLocalAccountsAdapter = {
         mustChangePassword: input.mustChangePassword ?? true,
       }),
     }),
-  setPermissions: (id, permissions) =>
+  setPermissions: (id, input: SetLocalAccountPermissionsInput) =>
     platformRequest<LocalAccountDetail>(`/api/v1/local-accounts/${encodeURIComponent(id)}/permissions`, {
       method: "PUT",
-      body: JSON.stringify({ permissions }),
+      body: JSON.stringify({
+        permissions: input.permissions,
+        expectedVersion: input.expectedVersion,
+      }),
     }),
   disableTotp: (id) =>
     platformRequest<void>(`/api/v1/local-accounts/${encodeURIComponent(id)}/totp`, { method: "DELETE" }),

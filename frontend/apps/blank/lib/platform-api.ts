@@ -9,6 +9,18 @@ interface PlatformRequestOptions {
   preserveSessionOn401?: boolean;
 }
 
+/** Thrown on non-2xx platform responses so surfaces can branch on HTTP status (e.g. 409 CAS). */
+export class PlatformRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly detail?: unknown,
+  ) {
+    super(message);
+    this.name = "PlatformRequestError";
+  }
+}
+
 /** Protected platform transport shared by all blank-host adapters. */
 export async function platformRequest<T>(path: string, init: RequestInit = {}, options: PlatformRequestOptions = {}): Promise<T> {
   const tokenUsed = authToken();
@@ -25,7 +37,7 @@ export async function platformRequest<T>(path: string, init: RequestInit = {}, o
     invalidateSession(response.status, tokenUsed, options.preserveSessionOn401 === true);
     const body = await response.json().catch(() => null) as { detail?: unknown } | null;
     const message = typeof body?.detail === "string" ? body.detail : `Request failed (${response.status})`;
-    throw new Error(message);
+    throw new PlatformRequestError(message, response.status, body?.detail);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
