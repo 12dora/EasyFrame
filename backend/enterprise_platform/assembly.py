@@ -288,6 +288,52 @@ def create_platform_router(
 
     login_guard = _LoginAdmissionGuard(admit_login_attempt, login_credential_error)
 
+    _register_login_routes(
+        router,
+        ports=ports,
+        hooks=hooks,
+        login_guard=login_guard,
+        admit_second_factor_attempt=admit_second_factor_attempt,
+    )
+    _register_account_self_service_routes(
+        router,
+        ports=ports,
+        hooks=hooks,
+        current_user=current_user,
+        recovery_user=recovery_user,
+        permission_for=permission_for,
+        port_call=port_call,
+        admit_second_factor_attempt=admit_second_factor_attempt,
+    )
+    _register_footer_and_notification_routes(
+        router,
+        ports=ports,
+        current_user=current_user,
+        permission_for=permission_for,
+        port_call=port_call,
+    )
+    _register_integration_and_ops_routes(
+        router,
+        ports=ports,
+        hooks=hooks,
+        current_user=current_user,
+        permission_for=permission_for,
+        port_call=port_call,
+        audited_connection_test=audited_connection_test,
+        include_authz_integration=include_authz_integration,
+    )
+    _apply_route_groups(router, groups, include_authz_integration=include_authz_integration)
+    return router
+
+
+def _register_login_routes(
+    router: APIRouter,
+    *,
+    ports: PlatformPorts,
+    hooks: PlatformSecurityHooks,
+    login_guard: _LoginAdmissionGuard,
+    admit_second_factor_attempt,
+) -> None:
     @router.post("/auth/login", response_model=LoginResponse, tags=["auth"])
     def login(body: LoginRequest, request: Request) -> LoginResponse:
         second_factor_used = False
@@ -400,6 +446,18 @@ def create_platform_router(
         hooks.login_event(body.username, "auth.login.success", "passkey")
         return LoginResponse(access_token=token, must_change_password=must_change)
 
+
+def _register_account_self_service_routes(
+    router: APIRouter,
+    *,
+    ports: PlatformPorts,
+    hooks: PlatformSecurityHooks,
+    current_user,
+    recovery_user,
+    permission_for,
+    port_call,
+    admit_second_factor_attempt,
+) -> None:
     @router.get("/auth/me", response_model=CurrentUser, tags=["auth"])
     def me(user: CurrentUser = Depends(recovery_user)) -> CurrentUser:
         return hooks.present_current_user(user)
@@ -538,6 +596,15 @@ def create_platform_router(
         hooks.after_event(user.id, "auth.passkey.delete", {"passkeyId": passkey_id}, {"sessionsRevoked": True})
         return Response(status_code=204)
 
+
+def _register_footer_and_notification_routes(
+    router: APIRouter,
+    *,
+    ports: PlatformPorts,
+    current_user,
+    permission_for,
+    port_call,
+) -> None:
     @router.get("/app-settings/footer", response_model=FooterSettings, tags=["app-settings"])
     def get_footer() -> FooterSettings:
         return port_call(ports.footer.get_footer)
@@ -580,6 +647,18 @@ def create_platform_router(
     ) -> dict[str, int]:
         return {"updated": port_call(lambda: ports.notifications.mark_all_read(user.id, read_at=datetime.now(UTC)))}
 
+
+def _register_integration_and_ops_routes(
+    router: APIRouter,
+    *,
+    ports: PlatformPorts,
+    hooks: PlatformSecurityHooks,
+    current_user,
+    permission_for,
+    port_call,
+    audited_connection_test,
+    include_authz_integration: bool,
+) -> None:
     @router.get(
         "/identity-integration/settings",
         response_model=OidcSettingsSummary | OidcSettings,
@@ -687,9 +766,6 @@ def create_platform_router(
         result = port_call(lambda: ports.upstream_health.run_checks(actor_id=user.id))
         hooks.after_event(user.id, "ops.upstream_health.check", None, {"count": len(result)})
         return result
-
-    _apply_route_groups(router, groups, include_authz_integration=include_authz_integration)
-    return router
 
 
 def _apply_route_groups(router: APIRouter, groups: PlatformRouteGroups, *, include_authz_integration: bool) -> None:
