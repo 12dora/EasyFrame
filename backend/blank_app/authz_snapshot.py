@@ -3,29 +3,20 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
-from fastapi import HTTPException
 from pydantic import Field
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from blank_app.adapters import _get_setting
-from blank_app.database import SessionLocal
-from blank_app.models import Account, PermissionCatalog, PermissionSnapshot, PlatformSetting
+from blank_app.models import PermissionSnapshot
 from enterprise_platform.authz import (
     CatalogPermission,
-    DataScope,
-    EasyAuthClientError,
-    EasyAuthForbiddenError,
     EasyAuthPermissionClient,
-    normalize_grants,
 )
 from enterprise_platform.schemas import PlatformModel
-from enterprise_platform.secrets import SecretConfigurationError, decrypt_secret
 
 
 def _facade():
-    import blank_app.authz_api as authz_api
+    from blank_app import authz_api
 
     return authz_api
 
@@ -54,17 +45,17 @@ def seed_platform_catalog() -> None:
         "accounts.local.view": ("查看本地账户", "View local accounts"),
         "accounts.local.manage": ("管理本地账户", "Manage local accounts"),
     }
-    with SessionLocal() as db:
+    with _facade().SessionLocal() as db:
         registered_codes = {permission.code for permission in _facade().FRAMEWORK_PERMISSIONS}
-        db.query(PermissionCatalog).filter(PermissionCatalog.code.notin_(registered_codes)).update(
-            {PermissionCatalog.active: False},
+        db.query(_facade().PermissionCatalog).filter(_facade().PermissionCatalog.code.notin_(registered_codes)).update(
+            {_facade().PermissionCatalog.active: False},
             synchronize_session=False,
         )
         for permission in _facade().FRAMEWORK_PERMISSIONS:
-            row = db.get(PermissionCatalog, permission.code)
+            row = db.get(_facade().PermissionCatalog, permission.code)
             name_zh, name_en = names.get(permission.code, (permission.code, permission.code))
             if row is None:
-                row = PermissionCatalog(
+                row = _facade().PermissionCatalog(
                     code=permission.code,
                     name_zh=name_zh,
                     name_en=name_en,
@@ -89,12 +80,12 @@ def seed_platform_catalog() -> None:
 
 
 def _permission_client() -> EasyAuthPermissionClient:
-    data = _get_setting("easyauth")
+    data = _facade()._get_setting("easyauth")
     try:
-        credential = decrypt_secret(str(data.get("credential") or ""))
-    except SecretConfigurationError as exc:
-        raise EasyAuthClientError("EasyAuth credential storage is not configured") from exc
-    return EasyAuthPermissionClient(
+        credential = _facade().decrypt_secret(str(data.get("credential") or ""))
+    except _facade().SecretConfigurationError as exc:
+        raise _facade().EasyAuthClientError("EasyAuth credential storage is not configured") from exc
+    return _facade().EasyAuthPermissionClient(
         base_url=str(data.get("base_url") or ""),
         app_key=str(data.get("app_key") or _facade().FRAMEWORK_MANIFEST.app_key),
         auth_mode=str(data.get("auth_mode") or "static_app_token"),
@@ -102,42 +93,43 @@ def _permission_client() -> EasyAuthPermissionClient:
         timeout=5,
     )
 
+
 def _catalog_map(db) -> dict[str, CatalogPermission]:
     return {
-        row.code: CatalogPermission(
+        row.code: _facade().CatalogPermission(
             code=row.code,
-            supported_scopes=frozenset(DataScope(scope) for scope in row.supported_scopes),
+            supported_scopes=frozenset(_facade().DataScope(scope) for scope in row.supported_scopes),
             active=row.active,
         )
-        for row in db.query(PermissionCatalog).all()
+        for row in db.query(_facade().PermissionCatalog).all()
     }
 
 
 def ensure_account_snapshot(account_id: str | uuid.UUID) -> bool:
     """外部身份登录时补齐/刷新授权快照；失败保持零权限并允许后续重试。"""
 
-    parsed_id = uuid.UUID(str(account_id))
-    now = datetime.now(UTC)
-    with SessionLocal() as db:
-        account = db.get(Account, parsed_id)
+    parsed_id = _facade().uuid.UUID(str(account_id))
+    now = _facade().datetime.now(_facade().UTC)
+    with _facade().SessionLocal() as db:
+        account = db.get(_facade().Account, parsed_id)
         if account is None or not account.external_source or not account.external_user_id:
             return False
-        setting = db.get(PlatformSetting, "easyauth")
+        setting = db.get(_facade().PlatformSetting, "easyauth")
         app_key = str((setting.value if setting else {}).get("app_key") or "")
         cached = (
-            db.query(PermissionSnapshot)
+            db.query(_facade().PermissionSnapshot)
             .filter(
-                PermissionSnapshot.external_source == account.external_source,
-                PermissionSnapshot.external_user_id == account.external_user_id,
-                PermissionSnapshot.app_key == app_key,
+                _facade().PermissionSnapshot.external_source == account.external_source,
+                _facade().PermissionSnapshot.external_user_id == account.external_user_id,
+                _facade().PermissionSnapshot.app_key == app_key,
             )
             .one_or_none()
         )
-        if cached is not None and _utc(cached.expires_at) > now:
+        if cached is not None and _facade()._utc(cached.expires_at) > now:
             return True
     try:
-        refresh_account_snapshot(parsed_id)
-    except HTTPException:
+        _facade().refresh_account_snapshot(parsed_id)
+    except _facade().HTTPException:
         return False
     return True
 
@@ -145,38 +137,38 @@ def ensure_account_snapshot(account_id: str | uuid.UUID) -> bool:
 def refresh_account_snapshot(user_id: uuid.UUID) -> SnapshotResponse:
     """抓取并原子持久化单个外部账号快照；上游失败不覆盖最后成功数据。"""
 
-    with SessionLocal() as db:
-        account = db.get(Account, user_id)
+    with _facade().SessionLocal() as db:
+        account = db.get(_facade().Account, user_id)
         if account is None:
-            raise HTTPException(404, "user not found")
+            raise _facade().HTTPException(404, "user not found")
         if not account.external_source or not account.external_user_id:
-            raise HTTPException(409, "user external identity is not configured")
+            raise _facade().HTTPException(409, "user external identity is not configured")
         client: object | None = None
         try:
             client = _facade()._permission_client()
             snapshot = client.fetch_permission_snapshot(account.external_user_id)
-        except EasyAuthForbiddenError as exc:
-            raise HTTPException(403, str(exc)) from exc
-        except EasyAuthClientError as exc:
-            raise HTTPException(503, str(exc)) from exc
+        except _facade().EasyAuthForbiddenError as exc:
+            raise _facade().HTTPException(403, str(exc)) from exc
+        except _facade().EasyAuthClientError as exc:
+            raise _facade().HTTPException(503, str(exc)) from exc
         finally:
             if client is not None:
-                _close_permission_client(client)
-        if _utc(snapshot.expires_at) <= datetime.now(UTC):
-            raise HTTPException(503, "EasyAuth permission response is already expired")
+                _facade()._close_permission_client(client)
+        if _facade()._utc(snapshot.expires_at) <= _facade().datetime.now(_facade().UTC):
+            raise _facade().HTTPException(503, "EasyAuth permission response is already expired")
         account_id = account.id
         display_name = account.username
         external_source = account.external_source
         external_user_id = account.external_user_id
         row = (
-            db.query(PermissionSnapshot)
+            db.query(_facade().PermissionSnapshot)
             .filter(
-                PermissionSnapshot.external_source == external_source,
-                PermissionSnapshot.external_user_id == external_user_id,
-                PermissionSnapshot.app_key == snapshot.app_key,
+                _facade().PermissionSnapshot.external_source == external_source,
+                _facade().PermissionSnapshot.external_user_id == external_user_id,
+                _facade().PermissionSnapshot.app_key == snapshot.app_key,
             )
             .one_or_none()
-        ) or PermissionSnapshot(
+        ) or _facade().PermissionSnapshot(
             account_id=account_id,
             external_source=external_source,
             external_user_id=external_user_id,
@@ -189,10 +181,10 @@ def refresh_account_snapshot(user_id: uuid.UUID) -> SnapshotResponse:
             "grant_version": snapshot.grant_version,
             "catalog_version": snapshot.catalog_version,
             "snapshot_version": snapshot.snapshot_version,
-            "fetched_at": datetime.now(UTC),
+            "fetched_at": _facade().datetime.now(_facade().UTC),
             "expires_at": snapshot.expires_at,
         }
-        row = _commit_snapshot_row(
+        row = _facade()._commit_snapshot_row(
             db,
             row,
             external_source=external_source,
@@ -200,8 +192,8 @@ def refresh_account_snapshot(user_id: uuid.UUID) -> SnapshotResponse:
             app_key=snapshot.app_key,
             values=values,
         )
-        grant_count = len(normalize_grants(row.grants, _catalog_map(db)))
-        return SnapshotResponse(
+        grant_count = len(_facade().normalize_grants(row.grants, _facade()._catalog_map(db)))
+        return _facade().SnapshotResponse(
             user_id=account_id,
             display_name=display_name,
             external_user_id=external_user_id,
@@ -213,7 +205,7 @@ def refresh_account_snapshot(user_id: uuid.UUID) -> SnapshotResponse:
             fetched_at=row.fetched_at,
             expires_at=row.expires_at,
             expired=False,
-            role_groups=_role_groups(row.groups),
+            role_groups=_facade()._role_groups(row.groups),
         )
 
 
@@ -229,13 +221,13 @@ def _commit_snapshot_row(
     """原子提交 snapshot；较旧 grant_version 永远不能覆盖较新的撤权结果。"""
 
     insert_values = {
-        "id": row.id or uuid.uuid4(),
+        "id": row.id or _facade().uuid.uuid4(),
         "external_source": external_source,
         "external_user_id": external_user_id,
         "app_key": app_key,
         **values,
     }
-    statement = pg_insert(PermissionSnapshot).values(**insert_values)
+    statement = _facade().pg_insert(_facade().PermissionSnapshot).values(**insert_values)
     update_fields = {
         field: getattr(statement.excluded, field)
         for field in (
@@ -252,16 +244,16 @@ def _commit_snapshot_row(
     statement = statement.on_conflict_do_update(
         constraint="uq_platform_permission_snapshot",
         set_=update_fields,
-        where=statement.excluded.grant_version >= PermissionSnapshot.grant_version,
+        where=statement.excluded.grant_version >= _facade().PermissionSnapshot.grant_version,
     )
     db.execute(statement)
     db.commit()
     row = (
-        db.query(PermissionSnapshot)
+        db.query(_facade().PermissionSnapshot)
         .filter(
-            PermissionSnapshot.external_source == external_source,
-            PermissionSnapshot.external_user_id == external_user_id,
-            PermissionSnapshot.app_key == app_key,
+            _facade().PermissionSnapshot.external_source == external_source,
+            _facade().PermissionSnapshot.external_user_id == external_user_id,
+            _facade().PermissionSnapshot.app_key == app_key,
         )
         .one()
     )
@@ -270,7 +262,7 @@ def _commit_snapshot_row(
 
 
 def _utc(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=UTC)
+    return value if value.tzinfo else value.replace(tzinfo=_facade().UTC)
 
 
 def _role_groups(groups: object) -> list[str]:
@@ -286,4 +278,3 @@ def _close_permission_client(client: object) -> None:
     close = getattr(client, "close", None)
     if callable(close):
         close()
-
