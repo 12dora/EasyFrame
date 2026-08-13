@@ -27,6 +27,9 @@ def _facade():
     return adapters
 
 
+_DISCOVERY_REQUIRED_ENDPOINTS = ("authorization_endpoint", "token_endpoint", "jwks_uri")
+
+
 class BlankFooterAdapter:
     def get_footer(self) -> FooterSettings:
         with _facade().SessionLocal() as db:
@@ -194,6 +197,43 @@ class BlankIntegrationAdapter:
             ),
         )
 
+    @staticmethod
+    def _discovery_response(transport, url: str):
+        """返回 (response, 失败响应);两者恰有一个非 None。"""
+
+        try:
+            response = transport("GET", url, timeout=5, allow_localhost=_facade()._allow_local_outbound())
+        except _facade().UnsafeOutboundUrlError as exc:
+            return None, _facade().IdentityDiscoveryResponse(ok=False, error_kind="blocked", error_detail=str(exc))
+        except _facade().httpx.HTTPError as exc:
+            return None, _facade().IdentityDiscoveryResponse(
+                ok=False, error_kind="unreachable", error_detail=str(exc)[:300]
+            )
+        if response.status_code != 200:
+            return None, _facade().IdentityDiscoveryResponse(
+                ok=False, error_kind="http_error", error_detail=f"discovery 返回 {response.status_code}"
+            )
+        return response, None
+
+    @staticmethod
+    def _discovery_payload_failure(payload):
+        """载荷校验通过返回 None,否则返回失败响应。"""
+
+        if not isinstance(payload, dict) or any(
+            not isinstance(payload.get(key), str) for key in _DISCOVERY_REQUIRED_ENDPOINTS
+        ):
+            return _facade().IdentityDiscoveryResponse(
+                ok=False, error_kind="invalid_response", error_detail="discovery 缺少必要端点"
+            )
+        try:
+            for key in _DISCOVERY_REQUIRED_ENDPOINTS:
+                from enterprise_platform.urls import validate_endpoint_url
+
+                validate_endpoint_url(str(payload[key]))
+        except ValueError as exc:
+            return _facade().IdentityDiscoveryResponse(ok=False, error_kind="invalid_response", error_detail=str(exc))
+        return None
+
     def discover_oidc(self, issuer: str | None) -> IdentityDiscoveryResponse:
         configured = self.get_oidc_settings()
         target = (issuer or configured.issuer).strip().rstrip("/")
@@ -208,34 +248,18 @@ class BlankIntegrationAdapter:
             if server_base_url
             else _facade().guarded_request
         )
-        try:
-            response = transport("GET", url, timeout=5, allow_localhost=_facade()._allow_local_outbound())
-        except _facade().UnsafeOutboundUrlError as exc:
-            return _facade().IdentityDiscoveryResponse(ok=False, error_kind="blocked", error_detail=str(exc))
-        except _facade().httpx.HTTPError as exc:
-            return _facade().IdentityDiscoveryResponse(ok=False, error_kind="unreachable", error_detail=str(exc)[:300])
-        if response.status_code != 200:
-            return _facade().IdentityDiscoveryResponse(
-                ok=False, error_kind="http_error", error_detail=f"discovery 返回 {response.status_code}"
-            )
+        response, failure = self._discovery_response(transport, url)
+        if failure is not None:
+            return failure
         try:
             payload = response.json()
         except ValueError:
             return _facade().IdentityDiscoveryResponse(
                 ok=False, error_kind="invalid_response", error_detail="响应不是 JSON"
             )
-        required = ("authorization_endpoint", "token_endpoint", "jwks_uri")
-        if not isinstance(payload, dict) or any(not isinstance(payload.get(key), str) for key in required):
-            return _facade().IdentityDiscoveryResponse(
-                ok=False, error_kind="invalid_response", error_detail="discovery 缺少必要端点"
-            )
-        try:
-            for key in required:
-                from enterprise_platform.urls import validate_endpoint_url
-
-                validate_endpoint_url(str(payload[key]))
-        except ValueError as exc:
-            return _facade().IdentityDiscoveryResponse(ok=False, error_kind="invalid_response", error_detail=str(exc))
+        failure = self._discovery_payload_failure(payload)
+        if failure is not None:
+            return failure
         return _facade().IdentityDiscoveryResponse(
             ok=True,
             issuer=str(payload.get("issuer") or target),

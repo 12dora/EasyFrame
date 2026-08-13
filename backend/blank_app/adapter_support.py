@@ -109,6 +109,47 @@ def validate_signing_secrets() -> None:
             )
 
 
+def _strict_seed_satisfied(db, configured, *, now: datetime) -> bool:
+    """enabled/break_glass:已存在可用本地超管即跳过播种,配置用户名不合格则直接失败。"""
+
+    if configured is not None:
+        if (
+            _facade().account_is_eligible(configured, now=now)
+            and configured.external_source is None
+            and configured.is_admin
+        ):
+            return True
+        raise RuntimeError("configured bootstrap username is not a usable local superadmin")
+    usable_admin = (
+        db.query(_facade().Account.id)
+        .filter(
+            _facade().Account.external_source.is_(None),
+            _facade().Account.is_admin.is_(True),
+            _facade().Account.active.is_(True),
+            _facade().or_(_facade().Account.expires_at.is_(None), _facade().Account.expires_at > now),
+        )
+        .first()
+    )
+    return usable_admin is not None
+
+
+def _create_bootstrap_admin(db, username: str) -> None:
+    password = _facade().os.getenv("BLANK_ADMIN_PASSWORD")
+    if not password or _facade().is_unsafe_bootstrap_secret(password, min_length=12):
+        raise RuntimeError("BLANK_ADMIN_PASSWORD must be at least 12 characters and must not use a public example")
+    db.add(
+        _facade().Account(
+            username=username,
+            email=_facade().os.getenv("BLANK_ADMIN_EMAIL") or None,
+            password_hash=_facade().pwd_context.hash(password),
+            active=True,
+            is_admin=True,
+            must_change_password=True,
+        )
+    )
+    db.commit()
+
+
 def seed_default_admin() -> None:
     mode = _facade().local_auth_mode()
     runtime = _facade().os.getenv("BLANK_RUNTIME_ENV", "production").strip().lower()
@@ -120,45 +161,13 @@ def seed_default_admin() -> None:
     with _facade().SessionLocal() as db:
         configured = db.query(_facade().Account).filter(_facade().Account.username == username).one_or_none()
         if mode in {"enabled", "break_glass"}:
-            now = _facade().datetime.now(_facade().UTC)
-            if configured is not None:
-                if (
-                    _facade().account_is_eligible(configured, now=now)
-                    and configured.external_source is None
-                    and configured.is_admin
-                ):
-                    return
-                raise RuntimeError("configured bootstrap username is not a usable local superadmin")
-            usable_admin = (
-                db.query(_facade().Account.id)
-                .filter(
-                    _facade().Account.external_source.is_(None),
-                    _facade().Account.is_admin.is_(True),
-                    _facade().Account.active.is_(True),
-                    _facade().or_(_facade().Account.expires_at.is_(None), _facade().Account.expires_at > now),
-                )
-                .first()
-            )
-            if usable_admin is not None:
+            if _strict_seed_satisfied(db, configured, now=_facade().datetime.now(_facade().UTC)):
                 return
         elif configured is not None:
             # development/demo 保持 v1 行为：配置用户名存在即不改写。
             return
 
-        password = _facade().os.getenv("BLANK_ADMIN_PASSWORD")
-        if not password or _facade().is_unsafe_bootstrap_secret(password, min_length=12):
-            raise RuntimeError("BLANK_ADMIN_PASSWORD must be at least 12 characters and must not use a public example")
-        db.add(
-            _facade().Account(
-                username=username,
-                email=_facade().os.getenv("BLANK_ADMIN_EMAIL") or None,
-                password_hash=_facade().pwd_context.hash(password),
-                active=True,
-                is_admin=True,
-                must_change_password=True,
-            )
-        )
-        db.commit()
+        _create_bootstrap_admin(db, username)
 
 
 def local_auth_mode() -> str:

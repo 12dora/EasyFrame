@@ -44,30 +44,19 @@ class UpstreamPrincipal:
         *,
         max_lifetime_seconds: int = DEFAULT_MAX_PRINCIPAL_LIFETIME_SECONDS,
     ) -> UpstreamPrincipal:
-        for key in ("sub", "iss", "name", "email"):
-            if not isinstance(claims.get(key), str) or not claims[key].strip():
-                raise PrincipalValidationError(f"missing {key}")
-        for key in ("aud", "exp", "iat", "active"):
-            if claims.get(key) is None:
-                raise PrincipalValidationError(f"missing {key}")
+        _require_present_claims(claims)
         if claims["iss"] != issuer:
             raise PrincipalValidationError("principal issuer mismatch")
-        actual_audience = claims["aud"]
-        if not (actual_audience == audience or isinstance(actual_audience, list) and audience in actual_audience):
-            raise PrincipalValidationError("principal audience mismatch")
+        _require_audience(claims["aud"], audience)
         if claims["active"] is not True:
             raise PrincipalValidationError("inactive principal")
         now = datetime.now(UTC).timestamp()
-        expires_at = _timestamp(claims["exp"], "exp")
-        issued_at = _timestamp(claims["iat"], "iat")
-        if expires_at <= now:
-            raise PrincipalValidationError("principal expired")
-        if issued_at > now + MAX_CLOCK_SKEW_SECONDS:
-            raise PrincipalValidationError("principal iat is in the future")
-        if expires_at <= issued_at or expires_at - issued_at > max_lifetime_seconds:
-            raise PrincipalValidationError("principal lifetime exceeds maximum")
-        if now - issued_at > max_lifetime_seconds + MAX_CLOCK_SKEW_SECONDS:
-            raise PrincipalValidationError("principal is too old")
+        _require_freshness(
+            expires_at=_timestamp(claims["exp"], "exp"),
+            issued_at=_timestamp(claims["iat"], "iat"),
+            now=now,
+            max_lifetime_seconds=max_lifetime_seconds,
+        )
         return cls(
             sub=claims["sub"],
             issuer=claims["iss"],
@@ -92,25 +81,15 @@ def parse_upstream_principal_from_headers(
 ) -> UpstreamPrincipal | None:
     if mode == "disabled":
         return None
-    token = next((value for key, value in headers.items() if key.lower() == header_name.lower()), None)
+    token = _header_value(headers, header_name)
     if not token:
         return None
     if not issuer or not audience or not secret:
         raise PrincipalValidationError("principal verifier is not configured")
     if mode == "jwt":
-        try:
-            claims = jwt.decode(token, secret, algorithms=["HS256"], audience=audience, issuer=issuer)
-        except JWTError as exc:
-            raise PrincipalValidationError("invalid principal jwt") from exc
+        claims = _jwt_claims(token, secret=secret, audience=audience, issuer=issuer)
     elif mode == "header":
-        try:
-            payload, signature = token.split(".", 1)
-            expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest()
-            if not hmac.compare_digest(_decode(signature), expected):
-                raise PrincipalValidationError("invalid principal header signature")
-            claims = json.loads(_decode(payload))
-        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise PrincipalValidationError("invalid principal header envelope") from exc
+        claims = _signed_header_claims(token, secret=secret)
     else:
         raise PrincipalValidationError("unsupported principal mode")
     if not isinstance(claims, dict):
@@ -121,6 +100,53 @@ def parse_upstream_principal_from_headers(
         audience,
         max_lifetime_seconds=max_lifetime_seconds,
     )
+
+
+def _header_value(headers: dict[str, str], header_name: str) -> str | None:
+    return next((value for key, value in headers.items() if key.lower() == header_name.lower()), None)
+
+
+def _require_present_claims(claims: dict[str, Any]) -> None:
+    for key in ("sub", "iss", "name", "email"):
+        if not isinstance(claims.get(key), str) or not claims[key].strip():
+            raise PrincipalValidationError(f"missing {key}")
+    for key in ("aud", "exp", "iat", "active"):
+        if claims.get(key) is None:
+            raise PrincipalValidationError(f"missing {key}")
+
+
+def _require_audience(actual_audience: Any, audience: str) -> None:
+    if not (actual_audience == audience or isinstance(actual_audience, list) and audience in actual_audience):
+        raise PrincipalValidationError("principal audience mismatch")
+
+
+def _require_freshness(*, expires_at: float, issued_at: float, now: float, max_lifetime_seconds: int) -> None:
+    if expires_at <= now:
+        raise PrincipalValidationError("principal expired")
+    if issued_at > now + MAX_CLOCK_SKEW_SECONDS:
+        raise PrincipalValidationError("principal iat is in the future")
+    if expires_at <= issued_at or expires_at - issued_at > max_lifetime_seconds:
+        raise PrincipalValidationError("principal lifetime exceeds maximum")
+    if now - issued_at > max_lifetime_seconds + MAX_CLOCK_SKEW_SECONDS:
+        raise PrincipalValidationError("principal is too old")
+
+
+def _jwt_claims(token: str, *, secret: str, audience: str, issuer: str) -> Any:
+    try:
+        return jwt.decode(token, secret, algorithms=["HS256"], audience=audience, issuer=issuer)
+    except JWTError as exc:
+        raise PrincipalValidationError("invalid principal jwt") from exc
+
+
+def _signed_header_claims(token: str, *, secret: str) -> Any:
+    try:
+        payload, signature = token.split(".", 1)
+        expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(_decode(signature), expected):
+            raise PrincipalValidationError("invalid principal header signature")
+        return json.loads(_decode(payload))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PrincipalValidationError("invalid principal header envelope") from exc
 
 
 def _decode(value: str) -> bytes:

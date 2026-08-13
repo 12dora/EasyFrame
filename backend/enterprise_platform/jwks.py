@@ -73,24 +73,33 @@ def valid_jwks(payload: Any) -> bool:
         return False
     seen: set[str] = set()
     for key in keys:
-        if not isinstance(key, dict):
-            return False
-        kid = key.get("kid")
-        if not isinstance(kid, str) or not kid or len(kid) > 256 or kid in seen:
-            return False
-        kty = key.get("kty")
-        if key.get("use") not in {None, "sig"}:
-            return False
-        if kty == "RSA":
-            if key.get("alg") not in {None, "RS256"} or not _valid_rsa_key(key):
-                return False
-        elif kty == "EC":
-            if key.get("alg") not in {None, "ES256"} or not _valid_ec_key(key):
-                return False
-        else:
+        kid = _valid_key_id(key, seen)
+        if kid is None or not _valid_key_material(key):
             return False
         seen.add(kid)
     return True
+
+
+def _valid_key_id(key: Any, seen: set[str]) -> str | None:
+    """合法且未重复的 kid 才返回,否则 None(即拒绝该 JWKS)。"""
+
+    if not isinstance(key, dict):
+        return None
+    kid = key.get("kid")
+    if not isinstance(kid, str) or not kid or len(kid) > 256 or kid in seen:
+        return None
+    return kid
+
+
+def _valid_key_material(key: dict[str, Any]) -> bool:
+    if key.get("use") not in {None, "sig"}:
+        return False
+    kty = key.get("kty")
+    if kty == "RSA":
+        return key.get("alg") in {None, "RS256"} and _valid_rsa_key(key)
+    if kty == "EC":
+        return key.get("alg") in {None, "ES256"} and _valid_ec_key(key)
+    return False
 
 
 def _valid_rsa_key(key: dict[str, Any]) -> bool:

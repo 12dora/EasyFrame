@@ -260,26 +260,27 @@ def fetch_jwks(config: OidcConfig, force: bool = False) -> dict[str, Any]:
     return payload
 
 
-def validate_id_token(config: OidcConfig, token: str, nonce: str) -> dict[str, Any]:
-    try:
-        header = jwt.get_unverified_header(token)
-    except JWTError as exc:
-        raise OidcFlowError("id_token header 无效", kind="invalid_token", status_code=401) from exc
-    kid = header.get("kid")
-    algorithm = header.get("alg")
-    if algorithm not in {"RS256", "ES256"}:
-        raise OidcFlowError("id_token 算法不受支持", kind="invalid_token", status_code=401)
-    keys = [item for item in fetch_jwks(config).get("keys", []) if isinstance(item, dict)]
-    key = next((item for item in keys if kid is None or item.get("kid") == kid), None)
+def _matching_jwks_key(payload: dict[str, Any], kid: Any) -> dict[str, Any] | None:
+    keys = [item for item in payload.get("keys", []) if isinstance(item, dict)]
+    return next((item for item in keys if kid is None or item.get("kid") == kid), None)
+
+
+def _signing_key(config: OidcConfig, kid: Any) -> dict[str, Any]:
+    """先用缓存 JWKS 匹配;未命中再强制刷新一次,仍未命中即拒绝。"""
+
+    key = _matching_jwks_key(fetch_jwks(config), kid)
     if key is None:
-        keys = [item for item in fetch_jwks(config, True).get("keys", []) if isinstance(item, dict)]
-        key = next((item for item in keys if kid is None or item.get("kid") == kid), None)
+        key = _matching_jwks_key(fetch_jwks(config, True), kid)
     if key is None:
         raise OidcFlowError("id_token 签名密钥不在 JWKS 中", kind="invalid_token", status_code=401)
+    return key
+
+
+def _decoded_id_token(config: OidcConfig, token: str, key: dict[str, Any], algorithm: Any) -> dict[str, Any]:
     try:
         if key.get("use") not in {None, "sig"} or key.get("alg") not in {None, algorithm}:
             raise OidcFlowError("id_token 签名密钥用途不匹配", kind="invalid_token", status_code=401)
-        claims = jwt.decode(
+        return jwt.decode(
             token,
             key,
             algorithms=[algorithm],
@@ -289,6 +290,18 @@ def validate_id_token(config: OidcConfig, token: str, nonce: str) -> dict[str, A
         )
     except JWTError as exc:
         raise OidcFlowError("id_token 校验失败", kind="invalid_token", status_code=401) from exc
+
+
+def validate_id_token(config: OidcConfig, token: str, nonce: str) -> dict[str, Any]:
+    try:
+        header = jwt.get_unverified_header(token)
+    except JWTError as exc:
+        raise OidcFlowError("id_token header 无效", kind="invalid_token", status_code=401) from exc
+    kid = header.get("kid")
+    algorithm = header.get("alg")
+    if algorithm not in {"RS256", "ES256"}:
+        raise OidcFlowError("id_token 算法不受支持", kind="invalid_token", status_code=401)
+    claims = _decoded_id_token(config, token, _signing_key(config, kid), algorithm)
     if nonce and claims.get("nonce") != nonce:
         raise OidcFlowError("id_token nonce 不匹配", kind="invalid_token", status_code=401)
     return claims

@@ -421,6 +421,99 @@ class _LocalAccountService:
             _, catalog = self._catalog(uow)
             return self._detail(account, catalog=catalog, now=now)
 
+    @staticmethod
+    def _update_requests_change(
+        payload: UpdateLocalAccountRequest, account: LocalAccountRecord, *, is_admin_change: bool
+    ) -> bool:
+        return (
+            ("email" in payload.model_fields_set and _normalized_email(payload.email) != account.email)
+            or (payload.ui_locale is not None and payload.ui_locale != account.ui_locale)
+            or (payload.active is not None and payload.active != account.active)
+            or is_admin_change
+            or ("expires_at" in payload.model_fields_set and payload.expires_at != account.expires_at)
+        )
+
+    def _guard_update(
+        self,
+        payload: UpdateLocalAccountRequest,
+        account: LocalAccountRecord,
+        *,
+        user: CurrentUser,
+        catalog: dict[str, LocalPermissionRecord],
+        before_grants: list[LocalGrant],
+        is_admin_change: bool,
+    ) -> None:
+        if is_admin_change and not user.is_local_superadmin:
+            raise AuthError(422, "委派管理员不能变更管理员身份")
+        requested_change = self._update_requests_change(payload, account, is_admin_change=is_admin_change)
+        if requested_change and not user.is_local_superadmin:
+            self._guard_privileged_target(
+                user,
+                _is_privileged(account, before_grants, high_codes=_high_codes(catalog)),
+            )
+
+    @staticmethod
+    def _update_profile_values(
+        payload: UpdateLocalAccountRequest, account: LocalAccountRecord, *, actor_id: str
+    ) -> tuple[dict[str, Any], list[str]]:
+        values: dict[str, Any] = {}
+        changed_keys: list[str] = []
+        if "email" in payload.model_fields_set and _normalized_email(payload.email) != account.email:
+            values["email"] = _normalized_email(payload.email)
+            changed_keys.append("email")
+        if payload.ui_locale is not None and payload.ui_locale != account.ui_locale:
+            values["ui_locale"] = payload.ui_locale
+            changed_keys.append("uiLocale")
+        if payload.active is not None and payload.active != account.active:
+            if _is_self(account, actor_id) and not payload.active:
+                raise AuthError(403, "不能停用自己的账户")
+            values["active"] = payload.active
+            changed_keys.append("active")
+        return values, changed_keys
+
+    @staticmethod
+    def _apply_admin_change(
+        payload: UpdateLocalAccountRequest,
+        account: LocalAccountRecord,
+        *,
+        actor_id: str,
+        values: dict[str, Any],
+        changed_keys: list[str],
+    ) -> None:
+        if _is_self(account, actor_id) and not payload.is_admin:
+            raise AuthError(403, "不能撤销自己的管理员权限")
+        values["is_admin"] = payload.is_admin
+        changed_keys.append("isAdmin")
+        if payload.is_admin:
+            if "expires_at" in payload.model_fields_set and payload.expires_at is not None:
+                raise AuthError(422, "管理员账户不能设置有效期")
+            values["local_permissions"] = []
+            values["local_grants_version"] = account.local_grants_version + 1
+            if account.expires_at is not None:
+                values["expires_at"] = None
+                changed_keys.append("expiresAt")
+
+    @staticmethod
+    def _apply_expiry_change(
+        payload: UpdateLocalAccountRequest,
+        account: LocalAccountRecord,
+        *,
+        actor_id: str,
+        now: datetime,
+        values: dict[str, Any],
+        changed_keys: list[str],
+    ) -> None:
+        if _is_self(account, actor_id):
+            raise AuthError(403, "不能修改自己的有效期")
+        if payload.expires_at is not None and _expired(payload.expires_at, now=now):
+            raise AuthError(422, "有效期必须晚于当前时间")
+        resulting_admin = values.get("is_admin", account.is_admin)
+        if resulting_admin and payload.expires_at is not None:
+            raise AuthError(422, "管理员账户不能设置有效期")
+        if payload.expires_at != account.expires_at and "expires_at" not in values:
+            values["expires_at"] = payload.expires_at
+            changed_keys.append("expiresAt")
+
     def update(
         self, account_id: uuid.UUID, payload: UpdateLocalAccountRequest, *, user: CurrentUser
     ) -> LocalAccountDetail:
@@ -432,58 +525,22 @@ class _LocalAccountService:
             _, catalog = self._catalog(uow)
             before_grants = _normalize_stored_grants(account.local_permissions, catalog)
             is_admin_change = payload.is_admin is not None and payload.is_admin != account.is_admin
-            if is_admin_change and not user.is_local_superadmin:
-                raise AuthError(422, "委派管理员不能变更管理员身份")
-            requested_change = (
-                ("email" in payload.model_fields_set and _normalized_email(payload.email) != account.email)
-                or (payload.ui_locale is not None and payload.ui_locale != account.ui_locale)
-                or (payload.active is not None and payload.active != account.active)
-                or is_admin_change
-                or ("expires_at" in payload.model_fields_set and payload.expires_at != account.expires_at)
+            self._guard_update(
+                payload,
+                account,
+                user=user,
+                catalog=catalog,
+                before_grants=before_grants,
+                is_admin_change=is_admin_change,
             )
-            if requested_change and not user.is_local_superadmin:
-                self._guard_privileged_target(
-                    user,
-                    _is_privileged(account, before_grants, high_codes=_high_codes(catalog)),
-                )
 
-            values: dict[str, Any] = {}
-            changed_keys: list[str] = []
-            if "email" in payload.model_fields_set and _normalized_email(payload.email) != account.email:
-                values["email"] = _normalized_email(payload.email)
-                changed_keys.append("email")
-            if payload.ui_locale is not None and payload.ui_locale != account.ui_locale:
-                values["ui_locale"] = payload.ui_locale
-                changed_keys.append("uiLocale")
-            if payload.active is not None and payload.active != account.active:
-                if _is_self(account, actor_id) and not payload.active:
-                    raise AuthError(403, "不能停用自己的账户")
-                values["active"] = payload.active
-                changed_keys.append("active")
+            values, changed_keys = self._update_profile_values(payload, account, actor_id=actor_id)
             if is_admin_change:
-                if _is_self(account, actor_id) and not payload.is_admin:
-                    raise AuthError(403, "不能撤销自己的管理员权限")
-                values["is_admin"] = payload.is_admin
-                changed_keys.append("isAdmin")
-                if payload.is_admin:
-                    if "expires_at" in payload.model_fields_set and payload.expires_at is not None:
-                        raise AuthError(422, "管理员账户不能设置有效期")
-                    values["local_permissions"] = []
-                    values["local_grants_version"] = account.local_grants_version + 1
-                    if account.expires_at is not None:
-                        values["expires_at"] = None
-                        changed_keys.append("expiresAt")
+                self._apply_admin_change(payload, account, actor_id=actor_id, values=values, changed_keys=changed_keys)
             if "expires_at" in payload.model_fields_set:
-                if _is_self(account, actor_id):
-                    raise AuthError(403, "不能修改自己的有效期")
-                if payload.expires_at is not None and _expired(payload.expires_at, now=now):
-                    raise AuthError(422, "有效期必须晚于当前时间")
-                resulting_admin = values.get("is_admin", account.is_admin)
-                if resulting_admin and payload.expires_at is not None:
-                    raise AuthError(422, "管理员账户不能设置有效期")
-                if payload.expires_at != account.expires_at and "expires_at" not in values:
-                    values["expires_at"] = payload.expires_at
-                    changed_keys.append("expiresAt")
+                self._apply_expiry_change(
+                    payload, account, actor_id=actor_id, now=now, values=values, changed_keys=changed_keys
+                )
 
             before = _account_state(account, before_grants)
             updated = uow.update_account(account.id, **values) if values else account

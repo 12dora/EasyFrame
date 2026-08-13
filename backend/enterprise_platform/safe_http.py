@@ -24,8 +24,9 @@ def validate_outbound_url(url: str, *, allow_localhost: bool = False) -> str:
     return url
 
 
-def _validated_addresses(url: str, *, allow_localhost: bool) -> tuple[str, ...]:
-    parsed = urlsplit(url.strip())
+def _validated_host(parsed, *, allow_localhost: bool) -> str:
+    """URL 结构、userinfo、https 与 localhost 守卫;通过后返回主机名。"""
+
     host = parsed.hostname
     if parsed.scheme not in {"http", "https"} or not host:
         raise UnsafeOutboundUrlError("必须是 http(s) 绝对地址")
@@ -33,14 +34,19 @@ def _validated_addresses(url: str, *, allow_localhost: bool) -> tuple[str, ...]:
         raise UnsafeOutboundUrlError("出站地址不得包含 userinfo")
     if parsed.scheme == "http" and not (allow_localhost and host.lower() in DEV_HTTP_HOSTS):
         raise UnsafeOutboundUrlError("出站地址必须使用 https")
-    if host.lower() == "localhost":
-        if not allow_localhost:
-            raise UnsafeOutboundUrlError("目标为本机/内网/保留地址,已拒绝")
-    literal = _ip(host)
-    if literal is not None:
-        if _blocked(literal) and not (allow_localhost and literal.is_loopback):
-            raise UnsafeOutboundUrlError("目标为本机/内网/保留地址,已拒绝")
-        return (str(literal),)
+    if host.lower() == "localhost" and not allow_localhost:
+        raise UnsafeOutboundUrlError("目标为本机/内网/保留地址,已拒绝")
+    return host
+
+
+def _guard_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address, *, allow_loopback: bool, detail: str
+) -> None:
+    if _blocked(address) and not (allow_loopback and address.is_loopback):
+        raise UnsafeOutboundUrlError(detail)
+
+
+def _resolve(parsed, host: str) -> list:
     try:
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
@@ -48,11 +54,21 @@ def _validated_addresses(url: str, *, allow_localhost: bool) -> tuple[str, ...]:
         raise UnsafeOutboundUrlError("无法解析目标主机") from exc
     if not infos:
         raise UnsafeOutboundUrlError("无法解析目标主机")
+    return infos
+
+
+def _validated_addresses(url: str, *, allow_localhost: bool) -> tuple[str, ...]:
+    parsed = urlsplit(url.strip())
+    host = _validated_host(parsed, allow_localhost=allow_localhost)
+    literal = _ip(host)
+    if literal is not None:
+        _guard_address(literal, allow_loopback=allow_localhost, detail="目标为本机/内网/保留地址,已拒绝")
+        return (str(literal),)
+    allow_loopback = allow_localhost and host.lower() == "localhost"
     addresses: list[str] = []
-    for info in infos:
+    for info in _resolve(parsed, host):
         address = ipaddress.ip_address(info[4][0])
-        if _blocked(address) and not (allow_localhost and host.lower() == "localhost" and address.is_loopback):
-            raise UnsafeOutboundUrlError("目标解析到本机/内网/保留地址,已拒绝")
+        _guard_address(address, allow_loopback=allow_loopback, detail="目标解析到本机/内网/保留地址,已拒绝")
         rendered = str(address)
         if rendered not in addresses:
             addresses.append(rendered)
