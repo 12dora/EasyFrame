@@ -135,7 +135,7 @@ export function localAccountsLabels(locale: EnterpriseCatalogLocale): Enterprise
     inactive: "已停用",
     admin: "管理员",
     totpEnabled: "二次验证",
-    mustChangePassword: "须改密",
+    mustChangePassword: "待改密",
     expired: "已过期",
     permissionCount: (count) => `${count}`,
     createTitle: "创建本地账户",
