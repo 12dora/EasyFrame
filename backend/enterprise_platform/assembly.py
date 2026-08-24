@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, TypeVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from enterprise_platform.auth import (
-    AuthError,
-    authenticate_login,
-    begin_passkey_login,
-    complete_passkey_login,
-    is_credential_failure,
-)
+from enterprise_platform.auth import AuthError
+from enterprise_platform.auth import authenticate_login as authenticate_login
+from enterprise_platform.auth import begin_passkey_login as begin_passkey_login
+from enterprise_platform.auth import complete_passkey_login as complete_passkey_login
+from enterprise_platform.auth import is_credential_failure as is_credential_failure
 from enterprise_platform.footer import sanitize_footer_html
+from enterprise_platform.login_flow import (
+    LoginAdmissionGuard,
+    _run_passkey_login_begin,
+    _run_passkey_login_complete,
+    _run_password_login,
+)
 from enterprise_platform.ports import (
     AccountPort,
     FooterPort,
@@ -27,12 +30,9 @@ from enterprise_platform.ports import (
     UpstreamHealthPort,
 )
 from enterprise_platform.rate_limit import (
-    account_failure_admission,
-    clear_login_failures,
     clear_second_factor_failures,
     enforce_login,
     enforce_second_factor,
-    record_login_failure,
     record_second_factor_failure,
     second_factor_failure_admission,
 )
@@ -85,42 +85,6 @@ AUTHZ_MANAGE = "authz.integration.manage"
 UPSTREAM_VIEW = "ops.upstream_health.view"
 UPSTREAM_MANAGE = "ops.upstream_health.manage"
 NOTIFICATION_CENTER_VIEW = "notification.center.view"
-
-
-_CredentialResult = TypeVar("_CredentialResult")
-
-
-@dataclass(frozen=True, slots=True)
-class _LoginAdmissionGuard:
-    """把「账号条带锁 -> 准入 -> 凭据校验 -> 记失败 / 清额度」收成一处。
-
-    三个登录入口(密码、passkey begin、passkey complete)此前逐字重复这段临界区。
-    F-04 要求整段是原子的:准入必须在凭据校验之前、记失败 / 清额度必须在同一把条带锁内,
-    因此 ``credential_check`` 只能在 ``with`` 内调用,不得提到锁外。
-    ``clear_on_success`` 保留 begin 的不对称:begin 只下发挑战、登录尚未完成,
-    成功也不清空账号失败额度,也不提前 reset。
-    """
-
-    admit: Callable[[str, Request], None]
-    credential_error: Callable[[str, AuthError], HTTPException]
-
-    def run(
-        self,
-        username: str,
-        request: Request,
-        credential_check: Callable[[], _CredentialResult],
-        *,
-        clear_on_success: bool,
-    ) -> _CredentialResult:
-        with account_failure_admission(username):
-            self.admit(username, request)
-            try:
-                result = credential_check()
-            except AuthError as exc:
-                raise self.credential_error(username, exc) from exc
-            if clear_on_success:
-                clear_login_failures(username)
-        return result
 
 
 @dataclass(frozen=True)
@@ -279,14 +243,7 @@ def create_platform_router(
         except AuthError as exc:
             raise HTTPException(exc.status_code, exc.detail) from exc
 
-    def login_credential_error(username: str, exc: AuthError) -> HTTPException:
-        """登录失败收口:只有凭据错误才消耗账号失败额度。"""
-
-        if is_credential_failure(exc):
-            record_login_failure(username)
-        return HTTPException(exc.status_code, exc.detail)
-
-    login_guard = _LoginAdmissionGuard(admit_login_attempt, login_credential_error)
+    login_guard = LoginAdmissionGuard(admit_login_attempt)
 
     _register_login_routes(
         router,
@@ -331,120 +288,40 @@ def _register_login_routes(
     *,
     ports: PlatformPorts,
     hooks: PlatformSecurityHooks,
-    login_guard: _LoginAdmissionGuard,
+    login_guard: LoginAdmissionGuard,
     admit_second_factor_attempt,
 ) -> None:
     @router.post("/auth/login", response_model=LoginResponse, tags=["auth"])
     def login(body: LoginRequest, request: Request) -> LoginResponse:
-        second_factor_used = False
-
-        @contextmanager
-        def second_factor_admission(account_id: str):
-            nonlocal second_factor_used
-            second_factor_used = True
-            with second_factor_failure_admission(account_id):
-                admit_second_factor_attempt(account_id, "login", request)
-                try:
-                    yield
-                except AuthError as exc:
-                    if exc.kind == "second_factor":
-                        record_second_factor_failure(account_id)
-                        hooks.login_event(body.username, "auth.login.second_factor_failure", "totp")
-                    raise
-                else:
-                    clear_second_factor_failures(account_id)
-
-        def check() -> tuple[str, bool]:
-            return authenticate_login(
-                ports.account,
-                body.username,
-                body.password,
-                body.totp_code,
-                before_second_factor=second_factor_admission,
-            )
-
-        try:
-            token, must_change = login_guard.run(body.username, request, check, clear_on_success=True)
-        except HTTPException as exc:
-            if exc.status_code == 429:
-                hooks.login_event(
-                    body.username,
-                    "auth.login.rate_limited",
-                    "totp" if second_factor_used else "password",
-                )
-            elif (
-                not (isinstance(exc.detail, dict) and exc.detail.get("code") == "REQUIRE_SECOND_FACTOR")
-                and not second_factor_used
-            ):
-                hooks.login_event(body.username, "auth.login.failure", "password")
-            raise
-        hooks.login_event(
-            body.username,
-            "auth.login.success",
-            "totp" if second_factor_used else "password",
+        return _run_password_login(
+            body,
+            request,
+            account=ports.account,
+            login_guard=login_guard,
+            admit_second_factor=admit_second_factor_attempt,
+            login_event=hooks.login_event,
         )
-        return LoginResponse(access_token=token, must_change_password=must_change)
 
     @router.post("/auth/login/passkey/begin", response_model=PasskeyLoginBeginResponse, tags=["auth"])
     def passkey_login_begin(body: PasskeyLoginBeginRequest, request: Request) -> PasskeyLoginBeginResponse:
-        def check() -> Any:
-            return begin_passkey_login(ports.account, body.username, body.password)
-
-        # begin 只是挑战下发,登录尚未完成:不消耗额度,也不提前 reset。
-        try:
-            _, challenge = login_guard.run(body.username, request, check, clear_on_success=False)
-        except HTTPException as exc:
-            hooks.login_event(
-                body.username,
-                "auth.login.rate_limited" if exc.status_code == 429 else "auth.login.failure",
-                "password",
-            )
-            raise
-        return PasskeyLoginBeginResponse(options=challenge.options, state_token=challenge.state_token)
+        return _run_passkey_login_begin(
+            body,
+            request,
+            account=ports.account,
+            login_guard=login_guard,
+            login_event=hooks.login_event,
+        )
 
     @router.post("/auth/login/passkey/complete", response_model=LoginResponse, tags=["auth"])
     def passkey_login_complete(body: PasskeyLoginCompleteRequest, request: Request) -> LoginResponse:
-        second_factor_used = False
-        second_factor_failure_audited = False
-
-        @contextmanager
-        def passkey_admission(account_id: str):
-            nonlocal second_factor_failure_audited, second_factor_used
-            second_factor_used = True
-            with second_factor_failure_admission(account_id):
-                admit_second_factor_attempt(account_id, "login", request)
-                try:
-                    yield
-                except AuthError as exc:
-                    if exc.kind == "second_factor":
-                        record_second_factor_failure(account_id)
-                        hooks.login_event(body.username, "auth.login.second_factor_failure", "passkey")
-                        second_factor_failure_audited = True
-                    raise
-                else:
-                    clear_second_factor_failures(account_id)
-
-        def check() -> tuple[str, bool]:
-            return complete_passkey_login(
-                ports.account,
-                body.username,
-                body.password,
-                body.state_token,
-                body.credential,
-                before_second_factor=passkey_admission,
-            )
-
-        try:
-            token, must_change = login_guard.run(body.username, request, check, clear_on_success=True)
-        except HTTPException as exc:
-            if exc.status_code == 429:
-                action = "auth.login.rate_limited"
-                hooks.login_event(body.username, action, "passkey" if second_factor_used else "password")
-            elif not second_factor_failure_audited:
-                hooks.login_event(body.username, "auth.login.failure", "password")
-            raise
-        hooks.login_event(body.username, "auth.login.success", "passkey")
-        return LoginResponse(access_token=token, must_change_password=must_change)
+        return _run_passkey_login_complete(
+            body,
+            request,
+            account=ports.account,
+            login_guard=login_guard,
+            admit_second_factor=admit_second_factor_attempt,
+            login_event=hooks.login_event,
+        )
 
 
 def _register_account_self_service_routes(
