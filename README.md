@@ -63,3 +63,9 @@ make blank-e2e                         # = pnpm --dir frontend blank:e2e(Playwri
 ## 文档
 
 - [docs/LOCAL_ACCOUNTS.md](docs/LOCAL_ACCOUNTS.md) — 本地账户管理(超管建号、权限授予、2FA 救援)的接口与行为契约
+
+## 许可
+
+[Apache License 2.0](LICENSE)。可自由使用、修改、商用与再分发,含显式专利授权;分发时需保留
+许可证与版权声明,并标注你所做的修改。子模块 [EasyUI](https://github.com/12dora/EasyUI) 同样以
+Apache-2.0 授权。

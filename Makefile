@@ -55,12 +55,13 @@ blank-check:
 		export BLANK_BACKEND_PORT="$$backend_port"; \
 		export BLANK_WEBAUTHN_RP_ID="127.0.0.1"; \
 		export BLANK_WEBAUTHN_ORIGINS="http://127.0.0.1:$$frontend_port"; \
-		export BLANK_POSTGRES_PASSWORD="blank-check-database-password-2026"; \
 		export BLANK_RUNTIME_ENV="test"; \
 		export BLANK_LOCAL_AUTH_MODE="development"; \
-		export BLANK_JWT_SECRET="blank-check-jwt-secret-0123456789abcdef"; \
-		export BLANK_ADMIN_PASSWORD="blank-check-admin-password-2026"; \
-		export BLANK_INTEGRATION_ENVELOPE_KEY="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="; \
+		set -- $$(python3 -c 'import base64, secrets; print(secrets.token_hex(24), secrets.token_hex(32), secrets.token_hex(24), base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'); \
+		export BLANK_POSTGRES_PASSWORD="$${BLANK_POSTGRES_PASSWORD:-check-$$1}"; \
+		export BLANK_JWT_SECRET="$${BLANK_JWT_SECRET:-$$2}"; \
+		export BLANK_ADMIN_PASSWORD="$${BLANK_ADMIN_PASSWORD:-check-$$3}"; \
+		export BLANK_INTEGRATION_ENVELOPE_KEY="$${BLANK_INTEGRATION_ENVELOPE_KEY:-$$4}"; \
 		check_compose='docker compose --env-file $(BLANK_CHECK_ENV_FILE) --file docker-compose.yml --project-name '"$$check_project"; \
 		cleanup() { $$check_compose down --volumes --remove-orphans --rmi local; }; \
 		trap cleanup EXIT INT TERM; \
