@@ -181,6 +181,22 @@ class NotificationPage(PlatformModel):
     next_cursor: str | None = None
 
 
+NotificationOutboxStatus = Literal["queued", "accepted", "sent", "delivered", "failed", "superseded"]
+
+
+class NotificationDeliveryStatus(PlatformModel):
+    """宿主可嵌入业务资源的通知投递摘要。delivered 不代表已读。"""
+
+    status: NotificationOutboxStatus
+    accepted_at: datetime | None = None
+    sent_at: datetime | None = None
+    delivered_at: datetime | None = None
+    last_error: str | None = None
+    provider_message_id: str | None = None
+    recipient_count: int = 0
+    last_reconciled_at: datetime | None = None
+
+
 HealthStatus = Literal["healthy", "warning", "unhealthy", "unknown"]
 
 
