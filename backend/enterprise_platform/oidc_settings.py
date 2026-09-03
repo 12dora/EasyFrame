@@ -38,8 +38,6 @@ def normalize_oidc_settings(payload: OidcSettingsUpdate) -> OidcSettingsUpdate:
             "redirect_base_url": normalize_base_url(payload.redirect_base_url),
             "frontend_base_url": normalize_base_url(payload.frontend_base_url),
             "server_base_url": normalize_base_url(payload.server_base_url),
-            "authentik_api_base_url": normalize_base_url(payload.authentik_api_base_url),
-            "authentik_api_token": _optional_secret(payload.authentik_api_token),
         }
     )
 

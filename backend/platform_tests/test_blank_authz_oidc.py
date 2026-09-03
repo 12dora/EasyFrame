@@ -179,8 +179,6 @@ def test_authority_changes_require_reentering_saved_credentials() -> None:
                     "jwks_uri": "https://old-id.example.com/jwks",
                     "client_id": "old-app",
                     "client_secret": "must-not-leak",
-                    "authentik_api_base_url": "https://old-id.example.com/api",
-                    "authentik_api_token": "must-not-leak-either",
                 },
             )
         )
@@ -207,15 +205,14 @@ def test_authority_changes_require_reentering_saved_credentials() -> None:
             "scopes": "openid profile email",
             "redirectBaseUrl": "http://localhost:8100",
             "frontendBaseUrl": "http://localhost:3100",
-            "authentikApiBaseUrl": "https://new-id.example.com/api",
         }
     )
     with pytest.raises(AuthError, match="clientSecret"):
         adapter.save_oidc_settings(oidc_payload, actor_id="test")
 
     oidc_payload = oidc_payload.model_copy(update={"client_secret": "new-client-secret"})
-    with pytest.raises(AuthError, match="API token"):
-        adapter.save_oidc_settings(oidc_payload, actor_id="test")
+    saved = adapter.save_oidc_settings(oidc_payload, actor_id="test")
+    assert saved.client_id == "new-app"
 
     with pytest.raises(AuthError, match="credential"):
         adapter.save_easyauth_settings(
@@ -223,8 +220,7 @@ def test_authority_changes_require_reentering_saved_credentials() -> None:
             actor_id="test",
         )
     with SessionLocal() as db:
-        assert db.get(PlatformSetting, "oidc").value["client_secret"] == "must-not-leak"
-        assert db.get(PlatformSetting, "oidc").value["authentik_api_token"] == "must-not-leak-either"
+        assert decrypt_secret(db.get(PlatformSetting, "oidc").value["client_secret"]) == "new-client-secret"
         assert db.get(PlatformSetting, "easyauth").value["credential"] == "must-not-leak"
 
 
@@ -232,7 +228,6 @@ def test_oidc_normalization_preserves_credentials_for_semantically_same_authorit
     from blank_app.adapters import BlankIntegrationAdapter
 
     client_secret = "preserved-client-secret"
-    api_token = "preserved-authentik-token"
     with SessionLocal() as db:
         db.merge(
             PlatformSetting(
@@ -249,8 +244,6 @@ def test_oidc_normalization_preserves_credentials_for_semantically_same_authorit
                     "scopes": "openid profile email",
                     "redirect_base_url": "http://localhost:8100",
                     "frontend_base_url": "http://localhost:3100",
-                    "authentik_api_base_url": " https://identity.example.com/api/ ",
-                    "authentik_api_token": encrypt_secret(api_token),
                 },
             )
         )
@@ -269,7 +262,6 @@ def test_oidc_normalization_preserves_credentials_for_semantically_same_authorit
                 "scopes": "  openid   profile\t email ",
                 "redirectBaseUrl": " http://localhost:8100/ ",
                 "frontendBaseUrl": " http://localhost:3100/ ",
-                "authentikApiBaseUrl": "https://identity.example.com/api",
             }
         ),
         actor_id="normalization-test",
@@ -284,13 +276,12 @@ def test_oidc_normalization_preserves_credentials_for_semantically_same_authorit
     assert result.scopes == "openid profile email"
     assert result.redirect_base_url == "http://localhost:8100"
     assert result.frontend_base_url == "http://localhost:3100"
-    assert result.authentik_api_base_url == "https://identity.example.com/api"
     assert result.has_client_secret is True
-    assert result.has_authentik_api_token is True
     with SessionLocal() as db:
         stored = db.get(PlatformSetting, "oidc").value
         assert decrypt_secret(stored["client_secret"]) == client_secret
-        assert decrypt_secret(stored["authentik_api_token"]) == api_token
+        assert "authentik_api_token" not in stored
+        assert "authentik_api_base_url" not in stored
 
 
 def test_integration_credentials_are_encrypted_and_key_loss_fails_closed(monkeypatch) -> None:
@@ -522,9 +513,7 @@ def test_blank_authz_catalog_manifest_snapshot_refresh_and_fail_closed(monkeypat
         assert discovery.status_code == 200
         assert discovery.json()["errorKind"] == "blocked"
         user_sync = client.post("/api/v1/identity-integration/user-sync", headers=headers)
-        assert user_sync.status_code == 200
-        assert user_sync.json()["supported"] is False
-        assert user_sync.json()["status"] == "not_supported"
+        assert user_sync.status_code == 404
 
         created_key = client.post(
             "/api/v1/authz-integration/descriptor-keys", headers=headers, json={"name": "deployment sync"}

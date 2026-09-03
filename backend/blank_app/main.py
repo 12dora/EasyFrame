@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from blank_app.adapters import (
+    BlankDirectoryAdapter,
     BlankFooterAdapter,
     BlankIntegrationAdapter,
     BlankNotificationAdapter,
@@ -105,6 +106,7 @@ ports = PlatformPorts(
     footer=BlankFooterAdapter(),
     notifications=BlankNotificationAdapter(),
     integrations=BlankIntegrationAdapter(),
+    directory=BlankDirectoryAdapter(),
     upstream_health=BlankUpstreamHealthAdapter(),
     require_permission=require_permission,
 )

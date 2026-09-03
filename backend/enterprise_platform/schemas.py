@@ -210,11 +210,6 @@ class OidcSettings(PlatformModel):
     redirect_uri: str = ""
     frontend_base_url: str = ""
     server_base_url: str = ""
-    authentik_api_base_url: str = ""
-    has_authentik_api_token: bool = False
-    user_sync_enabled: bool = False
-    user_sync_interval_minutes: int = 30
-    user_sync_supported: bool = False
 
 
 class OidcSettingsSummary(RedactedPlatformModel):
@@ -223,9 +218,6 @@ class OidcSettingsSummary(RedactedPlatformModel):
     enabled: bool = False
     configured: bool = False
     has_client_secret: bool = False
-    has_authentik_api_token: bool = False
-    user_sync_enabled: bool = False
-    user_sync_supported: bool = False
 
 
 class OidcSettingsUpdate(StrictPlatformModel):
@@ -241,10 +233,6 @@ class OidcSettingsUpdate(StrictPlatformModel):
     redirect_base_url: str = Field(max_length=2000)
     frontend_base_url: str = Field(max_length=2000)
     server_base_url: str = Field(default="", max_length=2000)
-    authentik_api_base_url: str = Field(default="", max_length=2000)
-    authentik_api_token: str | None = Field(default=None, max_length=2000)
-    user_sync_enabled: bool = False
-    user_sync_interval_minutes: int = Field(default=30, ge=1, le=1440)
 
     @field_validator(
         "issuer",
@@ -254,7 +242,6 @@ class OidcSettingsUpdate(StrictPlatformModel):
         "userinfo_endpoint",
         "redirect_base_url",
         "frontend_base_url",
-        "authentik_api_base_url",
     )
     @classmethod
     def validate_endpoint(cls, value: str) -> str:
@@ -344,15 +331,73 @@ class IdentityDiscoveryResponse(PlatformModel):
     error_detail: str | None = None
 
 
-class UserSyncCapabilityResponse(PlatformModel):
-    supported: bool
-    status: Literal["completed", "not_supported", "not_configured", "failed"]
+DirectoryAuthMode = Literal["static_app_token", "oauth_client_credentials"]
+DirectorySyncStatus = Literal["completed", "not_authoritative", "drift", "failed", "not_configured"]
+NotificationDeliveryState = Literal["queued", "accepted", "sent", "delivered", "failed", "superseded"]
+
+
+class DirectorySyncResult(PlatformModel):
+    status: DirectorySyncStatus
     summary: str
+    at: datetime | None = None
+    authoritative: bool = False
+    complete: bool = False
+    stale: bool = False
+    snapshot_id: str = ""
     upstream_total: int = 0
-    matched: int = 0
+    created: int = 0
     updated: int = 0
+    unchanged: int = 0
     deactivated: int = 0
-    reactivated: int = 0
+    unmapped: int = 0
+    error_detail: str | None = None
+
+
+class DirectorySettings(PlatformModel):
+    enabled: bool = False
+    base_url: str = ""
+    app_key: str = ""
+    has_credential: bool = False
+    auth_mode: DirectoryAuthMode = "static_app_token"
+    sync_interval_minutes: int = 30
+    last_sync: DirectorySyncResult | None = None
+
+
+class DirectorySettingsSummary(RedactedPlatformModel):
+    """无管理权限时仅返回业务状态，不返回目录协议或凭据标识。"""
+
+    enabled: bool = False
+    configured: bool = False
+    has_credential: bool = False
+
+
+class DirectorySettingsUpdate(StrictPlatformModel):
+    enabled: bool
+    base_url: str = Field(max_length=2000)
+    app_key: str = Field(max_length=200)
+    credential: str | None = Field(default=None, max_length=4000)
+    auth_mode: DirectoryAuthMode = "static_app_token"
+    sync_interval_minutes: int = Field(default=30, ge=1, le=1440)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        from enterprise_platform.urls import validate_endpoint_url
+
+        return validate_endpoint_url(value)
+
+
+class NotificationDeliveryStatus(PlatformModel):
+    """宿主单据可内嵌的通知投递状态；不代表已读。"""
+
+    status: NotificationDeliveryState
+    accepted_at: datetime | None = None
+    sent_at: datetime | None = None
+    delivered_at: datetime | None = None
+    last_error: str | None = None
+    provider_message_id: str | None = None
+    recipient_count: int = 0
+    last_reconciled_at: datetime | None = None
 
 
 class MyGrantResponse(PlatformModel):

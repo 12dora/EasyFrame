@@ -23,6 +23,7 @@ from enterprise_platform.login_flow import (
 )
 from enterprise_platform.ports import (
     AccountPort,
+    DirectoryPort,
     FooterPort,
     IntegrationPort,
     NotificationPort,
@@ -39,6 +40,7 @@ from enterprise_platform.rate_limit import (
 from enterprise_platform.response_redaction import (
     has_permission,
     present_authorization_settings,
+    present_directory_settings,
     present_oidc_settings,
 )
 from enterprise_platform.schemas import (
@@ -46,6 +48,10 @@ from enterprise_platform.schemas import (
     ChangePasswordRequest,
     ConnectionTestResult,
     CurrentUser,
+    DirectorySettings,
+    DirectorySettingsSummary,
+    DirectorySettingsUpdate,
+    DirectorySyncResult,
     EasyAuthSettingsUpdate,
     EasyAuthStatus,
     FooterSettings,
@@ -70,7 +76,6 @@ from enterprise_platform.schemas import (
     TotpDisableRequest,
     TotpStatusResponse,
     UpstreamHealthItem,
-    UserSyncCapabilityResponse,
 )
 
 AUTH_TOTP_CREATE = "auth.totp.create"
@@ -93,6 +98,7 @@ class PlatformPorts:
     footer: FooterPort
     notifications: NotificationPort
     integrations: IntegrationPort
+    directory: DirectoryPort
     upstream_health: UpstreamHealthPort
     require_permission: PermissionCheck
 
@@ -571,15 +577,52 @@ def _register_integration_and_ops_routes(
     ) -> IdentityDiscoveryResponse:
         return port_call(lambda: ports.integrations.discover_oidc(body.issuer))
 
-    @router.post(
-        "/identity-integration/user-sync", response_model=UserSyncCapabilityResponse, tags=["identity-integration"]
+    @router.get(
+        "/identity-integration/directory",
+        response_model=DirectorySettingsSummary | DirectorySettings,
+        tags=["identity-integration"],
     )
-    def sync_identity_users(
+    def directory_settings(
+        user: CurrentUser = Depends(current_user),
+        _permission: Any = Depends(permission_for(IDENTITY_VIEW)),
+    ) -> DirectorySettingsSummary | DirectorySettings:
+        value = port_call(ports.directory.get_directory_settings)
+        return present_directory_settings(
+            value,
+            can_manage=has_permission(user, _permission, IDENTITY_MANAGE),
+        )
+
+    @router.put("/identity-integration/directory", response_model=DirectorySettings, tags=["identity-integration"])
+    def save_directory_settings(
+        body: DirectorySettingsUpdate,
         user: CurrentUser = Depends(current_user),
         _permission: Any = Depends(permission_for(IDENTITY_MANAGE)),
-    ) -> UserSyncCapabilityResponse:
-        result = port_call(lambda: ports.integrations.sync_identity_users(actor_id=user.id))
-        hooks.after_event(user.id, "identity.user_sync", None, {"status": result.status, "supported": result.supported})
+    ) -> DirectorySettings:
+        result = port_call(lambda: ports.directory.save_directory_settings(body, actor_id=user.id))
+        hooks.after_event(user.id, "identity.directory.update", None, {"enabled": result.enabled})
+        return result
+
+    @router.post(
+        "/identity-integration/directory/test", response_model=ConnectionTestResult, tags=["identity-integration"]
+    )
+    def test_directory(
+        user: CurrentUser = Depends(current_user), _permission: Any = Depends(permission_for(IDENTITY_MANAGE))
+    ) -> ConnectionTestResult:
+        return audited_connection_test(
+            ports.directory.test_directory,
+            actor_id=user.id,
+            action="identity.directory.connection_test",
+        )
+
+    @router.post(
+        "/identity-integration/directory/sync", response_model=DirectorySyncResult, tags=["identity-integration"]
+    )
+    def sync_directory(
+        user: CurrentUser = Depends(current_user),
+        _permission: Any = Depends(permission_for(IDENTITY_MANAGE)),
+    ) -> DirectorySyncResult:
+        result = port_call(lambda: ports.directory.sync_directory(actor_id=user.id))
+        hooks.after_event(user.id, "identity.directory.sync", None, {"status": result.status})
         return result
 
     @router.post(

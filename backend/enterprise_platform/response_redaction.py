@@ -16,6 +16,8 @@ from enterprise_platform.schemas import (
     AuthorizationStatus,
     AuthorizationStatusSummary,
     CurrentUser,
+    DirectorySettings,
+    DirectorySettingsSummary,
     EasyAuthStatus,
     MyGrantResponse,
     MyGrantSummary,
@@ -45,9 +47,21 @@ def present_oidc_settings(
         enabled=value.enabled,
         configured=configured,
         has_client_secret=value.has_client_secret,
-        has_authentik_api_token=value.has_authentik_api_token,
-        user_sync_enabled=value.user_sync_enabled,
-        user_sync_supported=value.user_sync_supported,
+    )
+
+
+def present_directory_settings(
+    value: DirectorySettings,
+    *,
+    can_manage: bool,
+) -> DirectorySettings | DirectorySettingsSummary:
+    if can_manage:
+        return value
+    configured = bool(value.base_url and value.app_key and value.has_credential)
+    return DirectorySettingsSummary(
+        enabled=value.enabled,
+        configured=configured,
+        has_credential=value.has_credential,
     )
 
 

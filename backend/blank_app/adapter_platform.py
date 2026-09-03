@@ -8,6 +8,9 @@ from datetime import datetime
 from blank_app.models import Notification
 from enterprise_platform.schemas import (
     ConnectionTestResult,
+    DirectorySettings,
+    DirectorySettingsUpdate,
+    DirectorySyncResult,
     EasyAuthSettingsUpdate,
     EasyAuthStatus,
     FooterSettings,
@@ -17,7 +20,6 @@ from enterprise_platform.schemas import (
     OidcSettingsUpdate,
     PermissionRequestUrlUpdate,
     UpstreamHealthItem,
-    UserSyncCapabilityResponse,
 )
 
 
@@ -152,7 +154,7 @@ def _as_utc(value: datetime) -> datetime:
 class BlankIntegrationAdapter:
     def get_oidc_settings(self) -> OidcSettings:
         data = _facade()._get_setting("oidc")
-        return _facade().OidcSettings.model_validate({**data, "user_sync_supported": False})
+        return _facade().OidcSettings.model_validate(data)
 
     def save_oidc_settings(self, payload: OidcSettingsUpdate, *, actor_id: str) -> OidcSettings:
         payload = _facade().normalize_oidc_settings(payload)
@@ -160,29 +162,19 @@ class BlankIntegrationAdapter:
         old_client_authority = _facade().oidc_client_authority(old)
         new_client_authority = _facade().oidc_client_authority(payload)
         client_authority_changed = old_client_authority.has_values() and old_client_authority != new_client_authority
-        api_authority_changed = bool(old.get("authentik_api_base_url")) and (
-            _facade().normalize_base_url(str(old.get("authentik_api_base_url") or "")) != payload.authentik_api_base_url
-        )
         client_secret = payload.client_secret
         if client_authority_changed and not client_secret:
             raise _facade().AuthError(422, "身份提供方 authority 或 clientId 变更时必须重新填写 clientSecret")
         if client_secret is None:
             client_secret = _facade()._decrypt_saved_secret(old.get("client_secret"))
-        authentik_api_token = payload.authentik_api_token
-        if api_authority_changed and not authentik_api_token:
-            raise _facade().AuthError(422, "Authentik API authority 变更时必须重新填写 API token")
-        if authentik_api_token is None:
-            authentik_api_token = _facade()._decrypt_saved_secret(old.get("authentik_api_token"))
-        data = payload.model_dump(mode="json", exclude={"client_secret", "authentik_api_token"})
+        data = payload.model_dump(mode="json", exclude={"client_secret"})
         data["has_client_secret"] = bool(client_secret)
-        data["has_authentik_api_token"] = bool(authentik_api_token)
         data["client_secret"] = _facade().encrypt_secret(client_secret or "")
-        data["authentik_api_token"] = _facade().encrypt_secret(authentik_api_token or "")
         data["redirect_uri"] = (
             f"{payload.redirect_base_url.rstrip('/')}/api/v1/auth/oidc/callback" if payload.redirect_base_url else ""
         )
         _facade()._save_setting("oidc", data, actor_id=actor_id, action="identity.settings.update")
-        return _facade().OidcSettings.model_validate({**data, "user_sync_supported": False})
+        return _facade().OidcSettings.model_validate(data)
 
     def test_oidc(self) -> ConnectionTestResult:
         configured = self.get_oidc_settings()
@@ -269,13 +261,6 @@ class BlankIntegrationAdapter:
             userinfo_endpoint=str(payload.get("userinfo_endpoint") or ""),
         )
 
-    def sync_identity_users(self, *, actor_id: str) -> UserSyncCapabilityResponse:
-        return _facade().UserSyncCapabilityResponse(
-            supported=False,
-            status="not_supported",
-            summary="blank host 仅在登录时维护最小用户投影，不提供权威目录生命周期同步",
-        )
-
     def get_easyauth_status(self) -> EasyAuthStatus:
         data = _facade()._get_setting("easyauth")
         return _facade().EasyAuthStatus.model_validate(data or {})
@@ -338,6 +323,82 @@ class BlankIntegrationAdapter:
         finally:
             client.close()
         return _facade().ConnectionTestResult(ok=True, error_detail=f"snapshot {snapshot.snapshot_version}")
+
+
+class BlankDirectoryAdapter:
+    """blank 宿主持久化目录设置，但不投影用户、不探测 EasyAuth 目录。
+
+    test/sync 固定返回 ``not_configured``：本宿主没有用户目录投影，也尚未接入
+    DirectoryClient（由业务宿主实现）。设置写入 ``platform_settings.directory``。
+    """
+
+    def get_directory_settings(self) -> DirectorySettings:
+        return self._settings_from_stored(_facade()._get_setting("directory"))
+
+    def save_directory_settings(self, payload: DirectorySettingsUpdate, *, actor_id: str) -> DirectorySettings:
+        old = _facade()._get_setting("directory")
+        identity_changed = bool(old.get("base_url") or old.get("app_key") or old.get("auth_mode")) and (
+            _facade().normalize_base_url(str(old.get("base_url") or ""))
+            != _facade().normalize_base_url(payload.base_url)
+            or str(old.get("app_key") or "") != payload.app_key
+            or str(old.get("auth_mode") or "") != payload.auth_mode
+        )
+        credential = payload.credential
+        if identity_changed and not credential:
+            raise _facade().AuthError(422, "目录服务 authority、appKey 或 authMode 变更时必须重新填写 credential")
+        if credential is None:
+            credential = _facade()._decrypt_saved_secret(old.get("credential"))
+        credential = credential or ""
+        data = {
+            "enabled": payload.enabled,
+            "base_url": _facade().normalize_base_url(payload.base_url),
+            "app_key": payload.app_key.strip(),
+            "auth_mode": payload.auth_mode,
+            "sync_interval_minutes": payload.sync_interval_minutes,
+            "has_credential": bool(credential),
+            "credential": _facade().encrypt_secret(credential),
+            "last_sync": old.get("last_sync"),
+        }
+        _facade()._save_setting("directory", data, actor_id=actor_id, action="identity.directory.update")
+        return self._settings_from_stored(data)
+
+    def test_directory(self) -> ConnectionTestResult:
+        return _facade().ConnectionTestResult(
+            ok=False,
+            error_kind="not_configured",
+            error_detail="blank 宿主不探测 EasyAuth 目录连接",
+        )
+
+    def sync_directory(self, *, actor_id: str) -> DirectorySyncResult:
+        result = _facade().DirectorySyncResult(
+            status="not_configured",
+            at=_facade().datetime.now(_facade().UTC),
+            summary="blank 宿主不投影目录用户，目录同步未配置。",
+        )
+        stored = _facade()._get_setting("directory")
+        stored["last_sync"] = result.model_dump(mode="json")
+        _facade()._save_setting("directory", stored, actor_id=actor_id, action="identity.directory.sync")
+        return result
+
+    @staticmethod
+    def _settings_from_stored(data: dict) -> DirectorySettings:
+        payload = dict(data)
+        payload.pop("credential", None)
+        raw_last_sync = payload.get("last_sync")
+        last_sync = _facade().DirectorySyncResult.model_validate(raw_last_sync) if raw_last_sync else None
+        payload["last_sync"] = last_sync
+        return _facade().DirectorySettings.model_validate(
+            {
+                "enabled": False,
+                "base_url": "",
+                "app_key": "",
+                "has_credential": False,
+                "auth_mode": "static_app_token",
+                "sync_interval_minutes": 30,
+                "last_sync": None,
+                **payload,
+            }
+        )
 
 
 class BlankUpstreamHealthAdapter:
