@@ -39,8 +39,8 @@ def _client(handler) -> DirectoryClient:
     return DirectoryClient(_credential(), transport=httpx.MockTransport(handler))
 
 
-def _scope() -> dict[str, Any]:
-    return {
+def _scope(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "source_slug": "dingtalk",
         "corp_id": "corp-demo",
         "generation": 42,
@@ -49,16 +49,25 @@ def _scope() -> dict[str, Any]:
         "snapshot_at_status": "valid",
         "stale": False,
     }
+    payload.update(overrides)
+    return payload
 
 
-def _snapshot(*, snapshot_id: str = "snap-1") -> dict[str, Any]:
-    return {
+def _snapshot(
+    *,
+    snapshot_id: str = "snap-1",
+    snapshots: list[dict[str, Any]] | None = None,
+    **overrides: Any,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "snapshot_id": snapshot_id,
-        "snapshots": [_scope()],
+        "snapshots": snapshots if snapshots is not None else [_scope()],
         "stale": False,
         "complete": True,
         "authoritative": True,
     }
+    payload.update(overrides)
+    return payload
 
 
 def _user(*, user_ref: str, user_id: str | None = "f7c31a09e5b24f8d9a1c") -> dict[str, Any]:
@@ -96,6 +105,7 @@ def _page(
     total_items: int,
     total_pages: int,
     snapshot_id: str = "snap-1",
+    snapshot: dict[str, Any] | None = None,
 ) -> httpx.Response:
     return httpx.Response(
         200,
@@ -107,7 +117,7 @@ def _page(
                 "total_items": total_items,
                 "total_pages": total_pages,
             },
-            "directory_snapshot": _snapshot(snapshot_id=snapshot_id),
+            "directory_snapshot": snapshot if snapshot is not None else _snapshot(snapshot_id=snapshot_id),
         },
     )
 
@@ -226,6 +236,60 @@ def test_read_full_snapshot_raises_when_restart_budget_exhausted() -> None:
         _client(handler).read_full_snapshot(page_size=1, max_restarts=1)
     # 首页 + 第二页 409,重启一次后再首页 + 第二页 409
     assert calls == 4
+
+
+def test_read_full_snapshot_conjoins_stale_flip_as_non_authoritative() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(_query(request)["page"][0])
+        if page == 1:
+            return _page(users=[_user(user_ref=USER_A)], page=1, page_size=1, total_items=2, total_pages=2)
+        return _page(
+            users=[_user(user_ref=USER_B, user_id=None)],
+            page=2,
+            page_size=1,
+            total_items=2,
+            total_pages=2,
+            snapshot=_snapshot(stale=True, snapshots=[_scope(generation=43, stale=True)]),
+        )
+
+    result = _client(handler).read_full_snapshot(page_size=1)
+    assert [user.user_ref for user in result.users] == [USER_A, USER_B]
+    assert result.snapshot.snapshot_id == "snap-1"
+    assert result.snapshot.authoritative is False
+    assert result.snapshot.stale is True
+    assert result.snapshot.complete is True
+    assert result.snapshot.scopes[0].generation == 43
+
+
+def test_read_full_snapshot_allows_missing_snapshot_at() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _page(
+            users=[_user(user_ref=USER_A)],
+            page=1,
+            page_size=200,
+            total_items=1,
+            total_pages=1,
+            snapshot=_snapshot(
+                stale=True,
+                complete=False,
+                authoritative=False,
+                snapshots=[
+                    _scope(
+                        snapshot_at=None,
+                        snapshot_at_status="missing",
+                        status="pending",
+                        stale=True,
+                        generation=0,
+                    )
+                ],
+            ),
+        )
+
+    result = _client(handler).read_full_snapshot()
+    assert result.snapshot.authoritative is False
+    assert result.snapshot.scopes[0].snapshot_at is None
+    assert result.snapshot.scopes[0].snapshot_at_status == "missing"
+    assert result.users[0].user_ref == USER_A
 
 
 def test_read_full_snapshot_detects_duplicate_user_ref() -> None:

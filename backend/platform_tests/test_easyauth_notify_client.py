@@ -12,6 +12,7 @@ from enterprise_platform.easyauth import (
     EasyAuthCredential,
     NotifyClient,
     NotifyDedupConflictError,
+    NotifyProtocolError,
     NotifyRejectedError,
     NotifyRequest,
     NotifyThrottledError,
@@ -182,6 +183,70 @@ def test_get_message_parses_recipient_statuses() -> None:
     assert result.recipients[0].status == "delivered"
     assert result.recipients[1].user_id is None
     assert result.recipients[1].error_code == "USER_INACTIVE"
+
+
+def test_get_message_keeps_other_recipient_when_identity_is_null() -> None:
+    failed_ref = "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:dW5yZXNvbHZlZDA"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "message_id": MESSAGE_ID,
+                "status": "partially_failed",
+                "completed_at": "2026-07-16T10:03:12+08:00",
+                "recipients": [
+                    {
+                        "raw_ref": USER_REF,
+                        "user_id": "f7c31a09e5b24f8d9a1c",
+                        "dingtalk_user_id": "user0123",
+                        "status": "delivered",
+                        "error_code": "",
+                        "error": "",
+                        "sent_at": "2026-07-16T10:00:04+08:00",
+                        "delivered_at": "2026-07-16T10:01:00+08:00",
+                    },
+                    {
+                        "raw_ref": failed_ref,
+                        "user_id": None,
+                        "dingtalk_user_id": None,
+                        "status": "failed",
+                        "error_code": "UNRESOLVED_REF",
+                        "error": "未能解析收件人。",
+                        "sent_at": None,
+                        "delivered_at": None,
+                    },
+                ],
+            },
+        )
+
+    result = _client(handler).get_message(MESSAGE_ID)
+    assert result.recipients[0].status == "delivered"
+    assert result.recipients[0].dingtalk_user_id == "user0123"
+    assert result.recipients[1].raw_ref == failed_ref
+    assert result.recipients[1].user_id is None
+    assert result.recipients[1].dingtalk_user_id is None
+    assert result.recipients[1].status == "failed"
+
+
+def test_send_truncated_202_is_protocol_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(202, content=b'{"message_id":', headers={"Content-Type": "application/json"})
+
+    with pytest.raises(NotifyProtocolError) as captured:
+        _client(handler).send(_request())
+    assert isinstance(captured.value, NotifyUnavailableError)
+    assert not isinstance(captured.value, NotifyRejectedError)
+
+
+def test_get_message_malformed_status_body_is_protocol_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": 1, "recipients": "nope"})
+
+    with pytest.raises(NotifyProtocolError) as captured:
+        _client(handler).get_message(MESSAGE_ID)
+    assert isinstance(captured.value, NotifyUnavailableError)
+    assert not isinstance(captured.value, NotifyRejectedError)
 
 
 def test_get_message_maps_503_as_unavailable() -> None:

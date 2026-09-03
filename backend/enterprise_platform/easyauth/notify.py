@@ -51,6 +51,10 @@ class NotifyUnavailableError(NotifyClientError):
     """网络 / 5xx / 503:可稍后重试。"""
 
 
+class NotifyProtocolError(NotifyUnavailableError):
+    """成功响应体畸形:协议错误,可稍后重试,不得当永久拒绝。"""
+
+
 @dataclass(frozen=True)
 class NotifyRequest:
     recipients: tuple[str, ...]
@@ -76,7 +80,7 @@ class NotifySendResult:
 class NotifyRecipientStatus:
     raw_ref: str
     user_id: str | None
-    dingtalk_user_id: str
+    dingtalk_user_id: str | None
     status: str
     error_code: str
     error: str
@@ -145,7 +149,7 @@ def _map_send_response(response: httpx.Response) -> NotifySendResult:
         result = _parse_send_result(payload)
         expected_accepted = status == 202
         if result.accepted is not expected_accepted:
-            raise NotifyRejectedError(status, "", f"EasyAuth notify HTTP {status} 与 accepted={result.accepted} 不一致")
+            raise NotifyProtocolError(f"EasyAuth notify HTTP {status} 与 accepted={result.accepted} 不一致")
         return result
     _raise_notify_error(response)
 
@@ -176,13 +180,13 @@ def _success_object(response: httpx.Response) -> dict[str, Any]:
     try:
         return response_object(response)
     except EasyAuthProtocolError as exc:
-        raise NotifyRejectedError(response.status_code, "") from exc
+        raise NotifyProtocolError("EasyAuth notify 响应不是 JSON 对象") from exc
 
 
 def _parse_send_result(payload: dict[str, Any]) -> NotifySendResult:
     message_id = _require_str(payload.get("message_id"), "message_id")
     if not message_id:
-        raise NotifyRejectedError(200, "", "EasyAuth notify 响应缺少 message_id")
+        raise NotifyProtocolError("EasyAuth notify 响应缺少 message_id")
     return NotifySendResult(
         message_id=message_id,
         accepted=_require_bool(payload.get("accepted"), "accepted"),
@@ -195,7 +199,7 @@ def _parse_send_result(payload: dict[str, Any]) -> NotifySendResult:
 def _parse_message_status(payload: dict[str, Any]) -> NotifyMessageStatus:
     raw_recipients = payload.get("recipients")
     if not isinstance(raw_recipients, list):
-        raise NotifyRejectedError(200, "", "EasyAuth notify 响应缺少 recipients 数组")
+        raise NotifyProtocolError("EasyAuth notify 响应缺少 recipients 数组")
     return NotifyMessageStatus(
         status=_require_str(payload.get("status"), "status"),
         recipients=tuple(_parse_recipient(item) for item in raw_recipients),
@@ -205,14 +209,14 @@ def _parse_message_status(payload: dict[str, Any]) -> NotifyMessageStatus:
 
 def _parse_recipient(item: Any) -> NotifyRecipientStatus:
     if not isinstance(item, dict):
-        raise NotifyRejectedError(200, "", "EasyAuth notify recipients 条目必须是对象")
+        raise NotifyProtocolError("EasyAuth notify recipients 条目必须是对象")
     raw_ref = _require_str(item.get("raw_ref"), "raw_ref")
     if not raw_ref:
-        raise NotifyRejectedError(200, "", "raw_ref 不能为空")
+        raise NotifyProtocolError("raw_ref 不能为空")
     return NotifyRecipientStatus(
         raw_ref=raw_ref,
         user_id=_optional_str(item.get("user_id"), "user_id"),
-        dingtalk_user_id=_require_str(item.get("dingtalk_user_id"), "dingtalk_user_id"),
+        dingtalk_user_id=_optional_str(item.get("dingtalk_user_id"), "dingtalk_user_id"),
         status=_require_str(item.get("status"), "status"),
         error_code=_require_str(item.get("error_code"), "error_code"),
         error=_require_str(item.get("error"), "error"),
@@ -223,7 +227,7 @@ def _parse_recipient(item: Any) -> NotifyRecipientStatus:
 
 def _require_str(value: Any, field: str) -> str:
     if not isinstance(value, str):
-        raise NotifyRejectedError(200, "", f"{field} 必须是字符串")
+        raise NotifyProtocolError(f"{field} 必须是字符串")
     return value
 
 
@@ -235,11 +239,11 @@ def _optional_str(value: Any, field: str) -> str | None:
 
 def _require_bool(value: Any, field: str) -> bool:
     if not isinstance(value, bool):
-        raise NotifyRejectedError(200, "", f"{field} 必须是布尔值")
+        raise NotifyProtocolError(f"{field} 必须是布尔值")
     return value
 
 
 def _require_int(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise NotifyRejectedError(200, "", f"{field} 必须是整数")
+        raise NotifyProtocolError(f"{field} 必须是整数")
     return value

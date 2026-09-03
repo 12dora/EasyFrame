@@ -72,7 +72,7 @@ class DirectorySnapshotScope:
     corp_id: str
     generation: int
     status: str
-    snapshot_at: str
+    snapshot_at: str | None
     snapshot_at_status: str
     stale: bool
 
@@ -230,7 +230,22 @@ def _bind_or_check_pin(
         raise DirectoryInconsistentSnapshotError("directory 后续页 snapshot_id 与首页不一致")
     if pagination.total_items != expected_total or pagination.total_pages != expected_pages:
         raise DirectoryInconsistentSnapshotError("directory 后续页 pagination 与首页不一致")
-    return pinned_id, expected_total, expected_pages, snapshot
+    return pinned_id, expected_total, expected_pages, _conjoin_snapshot_meta(snapshot, meta)
+
+
+def _conjoin_snapshot_meta(left: DirectorySnapshotMeta, right: DirectorySnapshotMeta) -> DirectorySnapshotMeta:
+    """跨页合取:权威仅当每一页都权威、都 complete、且无一 stale;scope 取末页。"""
+
+    complete = left.complete and right.complete
+    stale = left.stale or right.stale
+    authoritative = left.authoritative and right.authoritative and complete and not stale
+    return DirectorySnapshotMeta(
+        snapshot_id=left.snapshot_id,
+        complete=complete,
+        stale=stale,
+        authoritative=authoritative,
+        scopes=right.scopes,
+    )
 
 
 def _parse_data(payload: dict[str, Any]) -> list[Any]:
@@ -288,7 +303,7 @@ def _parse_scope(item: Any) -> DirectorySnapshotScope:
         corp_id=_require_str(item.get("corp_id"), "snapshots.corp_id"),
         generation=_require_int(item.get("generation"), "snapshots.generation"),
         status=_require_str(item.get("status"), "snapshots.status"),
-        snapshot_at=_require_str(item.get("snapshot_at"), "snapshots.snapshot_at"),
+        snapshot_at=_optional_str(item.get("snapshot_at"), "snapshots.snapshot_at"),
         snapshot_at_status=_require_str(item.get("snapshot_at_status"), "snapshots.snapshot_at_status"),
         stale=_require_bool(item.get("stale"), "snapshots.stale"),
     )
@@ -340,6 +355,12 @@ def _optional_user_id(value: Any) -> str | None:
     if not isinstance(value, str):
         raise DirectoryInconsistentSnapshotError("user_id 必须是字符串或 null")
     return value
+
+
+def _optional_str(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    return _require_str(value, field)
 
 
 def _optional_title(value: Any) -> str:
