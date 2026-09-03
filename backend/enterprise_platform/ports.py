@@ -6,8 +6,9 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
+from enterprise_platform.easyauth.types import DirectorySnapshotMeta, DirectoryUserRecord
 from enterprise_platform.schemas import (
     AuthorizationCatalogItem,
     AuthorizationConnectionResult,
@@ -21,6 +22,9 @@ from enterprise_platform.schemas import (
     DescriptorKeyCreateResponse,
     DescriptorKeyResponse,
     DescriptorKeyUpdateRequest,
+    DirectorySettings,
+    DirectorySettingsUpdate,
+    DirectorySyncResult,
     EasyAuthSettingsUpdate,
     EasyAuthStatus,
     FooterSettings,
@@ -32,7 +36,6 @@ from enterprise_platform.schemas import (
     PasskeySummary,
     PermissionRequestUrlUpdate,
     UpstreamHealthItem,
-    UserSyncCapabilityResponse,
 )
 
 
@@ -93,11 +96,27 @@ class IntegrationPort(Protocol):
     def save_oidc_settings(self, payload: OidcSettingsUpdate, *, actor_id: str) -> OidcSettings: ...
     def test_oidc(self) -> ConnectionTestResult: ...
     def discover_oidc(self, issuer: str | None) -> IdentityDiscoveryResponse: ...
-    def sync_identity_users(self, *, actor_id: str) -> UserSyncCapabilityResponse: ...
     def get_easyauth_status(self) -> EasyAuthStatus: ...
     def save_easyauth_settings(self, payload: EasyAuthSettingsUpdate, *, actor_id: str) -> EasyAuthStatus: ...
     def save_permission_request_url(self, payload: PermissionRequestUrlUpdate, *, actor_id: str) -> EasyAuthStatus: ...
     def test_easyauth(self) -> ConnectionTestResult: ...
+
+
+class DirectoryProjectionPort(Protocol):
+    """宿主用户表投影。仅在权威快照下由 ``run_directory_sync`` 调用写入方法。"""
+
+    def begin(self, snapshot: DirectorySnapshotMeta) -> None: ...
+    def upsert_user(self, user: DirectoryUserRecord) -> Literal["created", "updated", "unchanged"]: ...
+    def deactivate_missing(self, seen_user_refs: frozenset[str]) -> int: ...
+    def commit(self) -> None: ...
+    def rollback(self) -> None: ...
+
+
+class DirectoryPort(Protocol):
+    def get_directory_settings(self) -> DirectorySettings: ...
+    def save_directory_settings(self, payload: DirectorySettingsUpdate, *, actor_id: str) -> DirectorySettings: ...
+    def test_directory(self) -> ConnectionTestResult: ...
+    def sync_directory(self, *, actor_id: str) -> DirectorySyncResult: ...
 
 
 class UpstreamHealthPort(Protocol):

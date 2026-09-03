@@ -73,6 +73,9 @@ from enterprise_platform.safe_http import UnsafeOutboundUrlError, guarded_reques
 from enterprise_platform.schemas import (
     ConnectionTestResult,
     CurrentUser,
+    DirectorySettings,
+    DirectorySettingsUpdate,
+    DirectorySyncResult,
     EasyAuthSettingsUpdate,
     EasyAuthStatus,
     FooterSettings,
@@ -85,7 +88,6 @@ from enterprise_platform.schemas import (
     PermissionRequestUrlUpdate,
     SecurityCapabilities,
     UpstreamHealthItem,
-    UserSyncCapabilityResponse,
 )
 from enterprise_platform.secrets import SecretConfigurationError, decrypt_secret, encrypt_secret
 from enterprise_platform.trusted_http import create_trusted_authority_transport
@@ -147,6 +149,7 @@ local_account_admin = adapter_account.local_account_admin
 require_permission = adapter_account.require_permission
 
 # 页脚/通知/集成/上游
+BlankDirectoryAdapter = adapter_platform.BlankDirectoryAdapter
 BlankFooterAdapter = adapter_platform.BlankFooterAdapter
 BlankIntegrationAdapter = adapter_platform.BlankIntegrationAdapter
 BlankNotificationAdapter = adapter_platform.BlankNotificationAdapter
@@ -163,6 +166,7 @@ __all__ = [
     "AuthError",
     "BASELINE_SELF_SERVICE",
     "BlankAccountAdapter",
+    "BlankDirectoryAdapter",
     "BlankFooterAdapter",
     "BlankIntegrationAdapter",
     "BlankLocalAccountAdmin",
@@ -175,6 +179,9 @@ __all__ = [
     "CryptContext",
     "CurrentUser",
     "DataScope",
+    "DirectorySettings",
+    "DirectorySettingsUpdate",
+    "DirectorySyncResult",
     "EasyAuthClientError",
     "EasyAuthForbiddenError",
     "EasyAuthPermissionClient",
@@ -220,7 +227,6 @@ __all__ = [
     "UTC",
     "UnsafeOutboundUrlError",
     "UpstreamHealthItem",
-    "UserSyncCapabilityResponse",
     "account_adapter",
     "account_is_eligible",
     "and_",

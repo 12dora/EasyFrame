@@ -152,12 +152,20 @@ def test_blank_backend_login_and_platform_contracts(monkeypatch) -> None:
         assert upstream.status_code == 200
         assert {item["dependency"] for item in upstream.json()} == {
             "authentik",
-            "authentik_directory",
+            "easyauth_directory",
             "easyauth",
             "scheduler",
         }
+        items = {item["dependency"]: item for item in upstream.json()}
+        assert items["easyauth_directory"]["supported"] is True
         unsupported = {item["dependency"] for item in upstream.json() if item["supported"] is False}
-        assert unsupported == {"authentik_directory", "scheduler"}
+        assert unsupported == {"scheduler"}
+        checked = client.post("/api/v1/ops/upstream-health/checks", headers=headers)
+        assert checked.status_code == 200, checked.text
+        directory = next(item for item in checked.json() if item["dependency"] == "easyauth_directory")
+        assert directory["supported"] is True
+        assert "not_configured" in directory["summary"]
+        assert directory["status"] == "unknown"
         assert client.post("/api/v1/auth/logout", headers=headers).status_code == 200
         assert client.get("/api/v1/auth/me", headers=headers).status_code == 401
 

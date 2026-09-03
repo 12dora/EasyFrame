@@ -318,6 +318,7 @@ def _quota_probe_app(port: SlowCredentialPort) -> FastAPI:
                 footer=None,
                 notifications=None,
                 integrations=None,
+                directory=None,
                 upstream_health=None,
                 require_permission=lambda _code: None,
             ),
