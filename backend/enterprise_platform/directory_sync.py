@@ -2,18 +2,32 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Protocol
 
 from enterprise_platform.easyauth.types import (
+    DirectoryAccessError,
     DirectorySnapshotDriftError,
     DirectorySnapshotMeta,
     DirectorySnapshotRead,
+    DirectoryUnavailableError,
     DirectoryUserRecord,
+    EasyAuthCredentialError,
 )
 from enterprise_platform.ports import DirectoryProjectionPort
 from enterprise_platform.schemas import DirectorySyncResult, DirectorySyncStatus
+
+logger = logging.getLogger(__name__)
+
+_SAFE_ERROR_HINTS: dict[type[BaseException], str] = {
+    DirectorySnapshotDriftError: "目录快照在读取期间发生变化",
+    DirectoryAccessError: "目录拒绝访问",
+    DirectoryUnavailableError: "目录暂不可用",
+    EasyAuthCredentialError: "EasyAuth 凭据无效或未配置",
+}
+_SAFE_ERROR_HINTS_BY_NAME = {cls.__qualname__: hint for cls, hint in _SAFE_ERROR_HINTS.items()}
 
 
 class DirectorySnapshotReader(Protocol):
@@ -39,7 +53,7 @@ def run_directory_sync(
             status="drift",
             at=at,
             summary="读取目录时快照发生变化，已中止同步，未写入。",
-            error_detail=str(exc) or "snapshot_changed",
+            error_detail=_safe_error_detail(exc),
         )
     except Exception as exc:
         port.rollback()
@@ -47,8 +61,9 @@ def run_directory_sync(
 
     users = tuple(snapshot_read.users)
     meta = snapshot_read.snapshot
-    if not meta.authoritative:
+    if not (meta.authoritative and meta.complete and not meta.stale):
         unmapped = _unmapped_count(users)
+        inconsistent = bool(meta.authoritative)
         return _result(
             status="not_authoritative",
             at=at,
@@ -58,7 +73,11 @@ def run_directory_sync(
             snapshot_id=meta.snapshot_id,
             upstream_total=len(users),
             unmapped=unmapped,
-            summary="目录快照非权威（不完整或已过期），已保留本地用户状态，未写入。",
+            summary=(
+                "目录快照元数据不一致（声称权威但不完整或已过期），已保留本地用户状态，未写入。"
+                if inconsistent
+                else "目录快照非权威（不完整或已过期），已保留本地用户状态，未写入。"
+            ),
         )
 
     try:
@@ -136,6 +155,16 @@ def _unmapped_count(users: Sequence[DirectoryUserRecord]) -> int:
     return sum(1 for user in users if user.user_id is None)
 
 
+def _safe_error_detail(exc: BaseException) -> str:
+    """API 只回传类名；已知异常可附带不含用户记录的短句。原始异常只进日志。"""
+
+    name = type(exc).__qualname__
+    hint = _SAFE_ERROR_HINTS.get(type(exc)) or _SAFE_ERROR_HINTS_BY_NAME.get(name)
+    if hint:
+        return f"{name}: {hint}"
+    return name
+
+
 def _failed(
     at: datetime,
     exc: BaseException,
@@ -146,7 +175,7 @@ def _failed(
     snapshot_id: str = "",
     upstream_total: int = 0,
 ) -> DirectorySyncResult:
-    detail = str(exc) or type(exc).__name__
+    logger.error("directory sync failed", exc_info=exc)
     return _result(
         status="failed",
         at=at,
@@ -156,7 +185,7 @@ def _failed(
         snapshot_id=snapshot_id,
         upstream_total=upstream_total,
         summary="目录同步失败。",
-        error_detail=detail,
+        error_detail=_safe_error_detail(exc),
     )
 
 

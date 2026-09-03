@@ -404,7 +404,7 @@ class BlankDirectoryAdapter:
 class BlankUpstreamHealthAdapter:
     probes = {
         "authentik": ("Authentik(SSO 登录)", True, lambda: _facade().BlankIntegrationAdapter().test_oidc()),
-        "authentik_directory": ("Authentik 用户同步", False, None),
+        "easyauth_directory": ("EasyAuth(用户目录)", True, lambda: _facade().BlankDirectoryAdapter().test_directory()),
         "easyauth": ("EasyAuth(权限授权)", True, lambda: _facade().BlankIntegrationAdapter().test_easyauth()),
         "scheduler": ("定时任务调度器", False, None),
     }

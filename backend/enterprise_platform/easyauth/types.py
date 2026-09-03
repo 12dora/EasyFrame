@@ -9,6 +9,18 @@ class DirectorySnapshotDriftError(Exception):
     """分页读取期间目录快照变化；调用方必须丢弃已读页。"""
 
 
+class DirectoryAccessError(Exception):
+    """401/403：凭据无效或未开通 directory 能力，不得重试。"""
+
+
+class DirectoryUnavailableError(Exception):
+    """网络 / 5xx / 429：目录暂不可用。"""
+
+
+class EasyAuthCredentialError(Exception):
+    """凭据缺失或 auth_mode 无法解析 Bearer。"""
+
+
 @dataclass(frozen=True)
 class DirectoryDepartmentRecord:
     department_ref: str

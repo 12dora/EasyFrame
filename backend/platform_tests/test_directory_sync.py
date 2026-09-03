@@ -11,6 +11,7 @@ from enterprise_platform.easyauth.types import (
     DirectorySnapshotDriftError,
     DirectorySnapshotMeta,
     DirectorySnapshotRead,
+    DirectoryUnavailableError,
     DirectoryUserRecord,
 )
 
@@ -68,6 +69,7 @@ class InMemoryProjectionPort:
         self.committed = False
         self.rolled_back = False
         self.fail_on_upsert: str | None = None
+        self.fail_exc: BaseException | None = None
 
     def begin(self, snapshot: DirectorySnapshotMeta) -> None:
         self.calls.append("begin")
@@ -80,7 +82,7 @@ class InMemoryProjectionPort:
     def upsert_user(self, user: DirectoryUserRecord) -> str:
         self.calls.append(f"upsert:{user.user_ref}")
         if self.fail_on_upsert == user.user_ref:
-            raise RuntimeError("投影失败")
+            raise self.fail_exc if self.fail_exc is not None else RuntimeError("投影失败")
         previous = self.users.get(user.user_ref)
         self.inactive.discard(user.user_ref)
         if previous is None:
@@ -189,6 +191,39 @@ def test_not_authoritative_snapshot_writes_nothing() -> None:
     assert port.inactive == set()
 
 
+@pytest.mark.parametrize(
+    ("complete", "stale"),
+    (
+        (False, False),
+        (True, True),
+        (False, True),
+    ),
+)
+def test_inconsistent_authoritative_metadata_writes_nothing(complete: bool, stale: bool) -> None:
+    existing = _user()
+    port = InMemoryProjectionPort({existing.user_ref: existing})
+    incoming = _user(user_ref="dt:v1:new", user_id=None, dingtalk_user_id="user-new", name="新人")
+    reader = FakeReader(
+        DirectorySnapshotRead(
+            users=(existing, incoming),
+            snapshot=_meta(authoritative=True, complete=complete, stale=stale, snapshot_id="inconsistent-1"),
+        )
+    )
+
+    result = _run(reader, port)
+
+    assert result.status == "not_authoritative"
+    assert result.authoritative is True
+    assert result.complete is complete
+    assert result.stale is stale
+    assert result.snapshot_id == "inconsistent-1"
+    assert (result.created, result.updated, result.unchanged, result.deactivated) == (0, 0, 0, 0)
+    assert "元数据不一致" in result.summary
+    assert port.calls == []
+    assert port.users == {existing.user_ref: existing}
+    assert port.inactive == set()
+
+
 def test_snapshot_drift_writes_nothing() -> None:
     existing = _user()
     port = InMemoryProjectionPort({existing.user_ref: existing})
@@ -199,7 +234,7 @@ def test_snapshot_drift_writes_nothing() -> None:
     assert result.status == "drift"
     assert result.created == 0
     assert result.deactivated == 0
-    assert result.error_detail == "snapshot_changed"
+    assert result.error_detail == "DirectorySnapshotDriftError: 目录快照在读取期间发生变化"
     assert "未写入" in result.summary
     assert port.calls == []
     assert port.users == {existing.user_ref: existing}
@@ -210,12 +245,18 @@ def test_projection_exception_rolls_back_and_marks_failed() -> None:
     incoming = _user(user_ref="dt:v1:boom", user_id="ak-boom", dingtalk_user_id="user-boom", name="爆炸")
     port = InMemoryProjectionPort({existing.user_ref: existing})
     port.fail_on_upsert = incoming.user_ref
+    port.fail_exc = Exception(
+        'duplicate key value violates unique constraint "users_email_key" '
+        "DETAIL: Key (email)=(keep@example.com) already exists."
+    )
     reader = FakeReader(DirectorySnapshotRead(users=(existing, incoming), snapshot=_meta()))
 
     result = _run(reader, port)
 
     assert result.status == "failed"
-    assert result.error_detail == "投影失败"
+    assert result.error_detail == "Exception"
+    assert "keep@example.com" not in (result.error_detail or "")
+    assert "email" not in (result.error_detail or "").lower()
     assert result.authoritative is True
     assert result.snapshot_id == "snap-1"
     assert port.rolled_back is True
@@ -233,10 +274,23 @@ def test_reader_exception_rolls_back_and_marks_failed() -> None:
     result = _run(reader, port)
 
     assert result.status == "failed"
-    assert result.error_detail == "目录不可用"
+    assert result.error_detail == "RuntimeError"
+    assert "目录不可用" not in (result.error_detail or "")
     assert port.calls == ["rollback"]
     assert port.rolled_back is True
     assert port.committed is False
+
+
+def test_known_directory_unavailable_error_detail_omits_raw_text() -> None:
+    port = InMemoryProjectionPort()
+    reader = FakeReader(error=DirectoryUnavailableError("GET users leaked keep@example.com"))
+
+    result = _run(reader, port)
+
+    assert result.status == "failed"
+    assert result.error_detail == "DirectoryUnavailableError: 目录暂不可用"
+    assert "keep@example.com" not in (result.error_detail or "")
+    assert port.calls == ["rollback"]
 
 
 def _admin_headers(client):
@@ -323,3 +377,79 @@ def test_blank_directory_routes_persist_settings_and_return_not_configured() -> 
         assert stored["has_credential"] is True
         assert decrypt_secret(stored["credential"]) == "eat_directory_test_token"
         assert stored["credential"].startswith("enc:v1:")
+
+
+@pytest.mark.usefixtures("blank_admin_seeded")
+def test_blank_directory_routes_redact_and_forbid_view_only_identity_user() -> None:
+    import uuid
+
+    from fastapi.testclient import TestClient
+
+    from blank_app.adapters import pwd_context
+    from blank_app.database import SessionLocal
+    from blank_app.main import app
+    from blank_app.models import Account
+
+    view_username = f"dir-view-{uuid.uuid4().hex[:8]}"
+    view_password = "View-only-directory-password!"
+    with SessionLocal() as db:
+        db.add(
+            Account(
+                username=view_username,
+                password_hash=pwd_context.hash(view_password),
+                active=True,
+                is_admin=False,
+                must_change_password=False,
+                local_permissions=[{"code": "identity.integration.view", "scope": "ALL"}],
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        saved = client.put(
+            "/api/v1/identity-integration/directory",
+            headers=headers,
+            json={
+                "enabled": True,
+                "baseUrl": "https://easyauth.example.com",
+                "appKey": "enterprise-blank",
+                "credential": "eat_directory_test_token",
+                "authMode": "static_app_token",
+                "syncIntervalMinutes": 15,
+            },
+        )
+        assert saved.status_code == 200, saved.text
+
+        view_login = client.post(
+            "/api/v1/auth/login",
+            json={"username": view_username, "password": view_password},
+        )
+        assert view_login.status_code == 200, view_login.text
+        view_headers = {"Authorization": f"Bearer {view_login.json()['accessToken']}"}
+
+        listed = client.get("/api/v1/identity-integration/directory", headers=view_headers)
+        assert listed.status_code == 200, listed.text
+        body = listed.json()
+        assert set(body) == {"enabled", "configured", "hasCredential"}
+        assert body == {"enabled": True, "configured": True, "hasCredential": True}
+
+        denied_put = client.put(
+            "/api/v1/identity-integration/directory",
+            headers=view_headers,
+            json={
+                "enabled": False,
+                "baseUrl": "https://easyauth.example.com",
+                "appKey": "enterprise-blank",
+                "credential": "must-not-write",
+                "authMode": "static_app_token",
+                "syncIntervalMinutes": 30,
+            },
+        )
+        assert denied_put.status_code == 403
+        assert client.post("/api/v1/identity-integration/directory/test", headers=view_headers).status_code == 403
+        assert client.post("/api/v1/identity-integration/directory/sync", headers=view_headers).status_code == 403
+        still = client.get("/api/v1/identity-integration/directory", headers=headers)
+        assert still.json()["enabled"] is True
+        assert still.json()["hasCredential"] is True
+        assert still.json()["baseUrl"] == "https://easyauth.example.com"
