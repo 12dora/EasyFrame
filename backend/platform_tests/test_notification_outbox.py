@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -17,7 +18,9 @@ from enterprise_platform.easyauth.errors import (
 from enterprise_platform.notification_outbox import (
     DEFAULT_MAX_ATTEMPTS,
     ERROR_DEDUP_CONFLICT,
+    ERROR_DEDUP_KEY_MISMATCH,
     ERROR_EXHAUSTED,
+    ERROR_PROVIDER_MESSAGE_MISSING,
     ERROR_REJECTED,
     ERROR_THROTTLED,
     ERROR_UNAVAILABLE,
@@ -33,6 +36,7 @@ from enterprise_platform.notification_outbox import (
     ProcessSummary,
     aggregate_local_status,
     backoff_delay,
+    clamp_outbox_status,
     classify_send_error,
     map_provider_recipient_status,
     process_outbox_once,
@@ -99,13 +103,16 @@ class InMemoryOutbox:
                 record.item,
                 lease_owner=owner,
                 lease_expires_at=now + timedelta(seconds=lease_seconds),
+                lease_token=secrets.token_urlsafe(12),
             )
             record.item = item
             claimed.append(item)
         return claimed
 
-    def mark_accepted(self, id: str, message_id: str, now: datetime) -> None:
-        record = self._require(id)
+    def mark_accepted(self, id: str, message_id: str, now: datetime, lease_token: str) -> bool:
+        record = self._leased(id, lease_token)
+        if record is None:
+            return False
         record.item = replace(
             record.item,
             status=STATUS_ACCEPTED,
@@ -113,10 +120,14 @@ class InMemoryOutbox:
             last_error=None,
             lease_owner=None,
             lease_expires_at=None,
+            lease_token=None,
         )
+        return True
 
-    def mark_retry(self, id: str, next_attempt_at: datetime, error: str) -> None:
-        record = self._require(id)
+    def mark_retry(self, id: str, next_attempt_at: datetime, error: str, lease_token: str) -> bool:
+        record = self._leased(id, lease_token)
+        if record is None:
+            return False
         record.item = replace(
             record.item,
             attempt_count=record.item.attempt_count + 1,
@@ -124,10 +135,14 @@ class InMemoryOutbox:
             last_error=error,
             lease_owner=None,
             lease_expires_at=None,
+            lease_token=None,
         )
+        return True
 
-    def mark_failed(self, id: str, error: str, now: datetime) -> None:
-        record = self._require(id)
+    def mark_failed(self, id: str, error: str, now: datetime, lease_token: str) -> bool:
+        record = self._leased(id, lease_token)
+        if record is None:
+            return False
         record.item = replace(
             record.item,
             status=STATUS_FAILED,
@@ -135,13 +150,17 @@ class InMemoryOutbox:
             last_error=error,
             lease_owner=None,
             lease_expires_at=None,
+            lease_token=None,
         )
+        return True
 
-    def claim_reconcile_due(self, limit: int, now: datetime) -> list[OutboxItem]:
+    def claim_reconcile_due(self, limit: int, now: datetime, lease_seconds: int, owner: str) -> list[OutboxItem]:
         due: list[_Record] = []
         for record in self._records.values():
             item = record.item
             if item.status not in (STATUS_ACCEPTED, STATUS_SENT):
+                continue
+            if item.lease_expires_at is not None and item.lease_expires_at > now:
                 continue
             if not item.provider_message_id:
                 raise ValueError(f"待对账条目 {item.id} 缺少 provider_message_id")
@@ -152,25 +171,55 @@ class InMemoryOutbox:
                     continue
             due.append(record)
         due.sort(key=lambda record: record.item.last_reconciled_at or datetime.min.replace(tzinfo=UTC))
-        return [record.item for record in due[:limit]]
+        claimed: list[OutboxItem] = []
+        for record in due[:limit]:
+            item = replace(
+                record.item,
+                lease_owner=owner,
+                lease_expires_at=now + timedelta(seconds=lease_seconds),
+                lease_token=secrets.token_urlsafe(12),
+            )
+            record.item = item
+            claimed.append(item)
+        return claimed
 
-    def apply_provider_status(self, id: str, status: FakeMessageStatus, now: datetime) -> None:
-        record = self._require(id)
+    def apply_provider_status(self, id: str, status: FakeMessageStatus, now: datetime, lease_token: str) -> bool:
+        record = self._leased(id, lease_token)
+        if record is None:
+            return False
         mapped = [map_provider_recipient_status(recipient.status) for recipient in status.recipients]
         aggregated = aggregate_local_status(mapped)
+        next_status = clamp_outbox_status(record.item.status, aggregated.status)
         sent_at = record.sent_at
-        if aggregated.status in (STATUS_SENT, STATUS_DELIVERED) and sent_at is None:
+        if next_status in (STATUS_SENT, STATUS_DELIVERED) and sent_at is None:
             sent_at = now
         record.sent_at = sent_at
         record.item = replace(
             record.item,
-            status=aggregated.status,
+            status=next_status,
             last_reconciled_at=now,
         )
+        return True
 
-    def release(self, id: str) -> None:
-        record = self._require(id)
-        record.item = replace(record.item, lease_owner=None, lease_expires_at=None)
+    def mark_reconcile_error(self, id: str, error: str, now: datetime, lease_token: str) -> bool:
+        record = self._leased(id, lease_token)
+        if record is None:
+            return False
+        record.item = replace(record.item, last_error=error, last_reconciled_at=now)
+        return True
+
+    def release(self, id: str, lease_token: str) -> bool:
+        record = self._leased(id, lease_token)
+        if record is None:
+            return False
+        record.item = replace(record.item, lease_owner=None, lease_expires_at=None, lease_token=None)
+        return True
+
+    def _leased(self, item_id: str, lease_token: str) -> _Record | None:
+        record = self._require(item_id)
+        if not lease_token or record.item.lease_token != lease_token:
+            return None
+        return record
 
     def _require(self, item_id: str) -> _Record:
         try:
@@ -237,11 +286,16 @@ def _queued(item_id: str = "item-1", *, dedup_key: str = "dedup-1") -> OutboxIte
         lease_owner=None,
         lease_expires_at=None,
         last_reconciled_at=None,
+        lease_token=None,
     )
 
 
 def _process(port: InMemoryOutbox, sender: FakeSender, *, now: datetime = NOW, owner: str = "worker-a", **kwargs):
     return process_outbox_once(port, sender, now=now, owner=owner, **kwargs)
+
+
+def _reconcile(port: InMemoryOutbox, sender: FakeSender, *, now: datetime = NOW, owner: str = "worker-a", **kwargs):
+    return reconcile_outbox_once(port, sender, now=now, owner=owner, **kwargs)
 
 
 def test_backoff_delay_is_exponential_capped_and_jitter_injectable() -> None:
@@ -452,6 +506,7 @@ def test_claimed_items_are_not_reclaimed_until_lease_expiry() -> None:
     first = port.claim_due(1, NOW, 30, "worker-a")
     assert [item.id for item in first] == ["item-1"]
     assert first[0].lease_owner == "worker-a"
+    assert first[0].lease_token
     second = port.claim_due(10, NOW, 30, "worker-b")
     assert [item.id for item in second] == ["item-2"]
     assert port.claim_due(10, NOW, 30, "worker-a") == []
@@ -467,7 +522,9 @@ def test_release_allows_reclaim_before_lease_expiry() -> None:
     port.put(_queued())
     claimed = port.claim_due(1, NOW, 30, "worker-a")
     assert claimed[0].lease_owner == "worker-a"
-    port.release("item-1")
+    token = claimed[0].lease_token
+    assert token is not None
+    port.release("item-1", token)
     reclaimed = port.claim_due(1, NOW, 30, "worker-b")
     assert reclaimed[0].lease_owner == "worker-b"
 
@@ -496,7 +553,7 @@ def test_reconcile_maps_sent_delivered_failed_and_advances_timestamp() -> None:
             "msg-failed": FakeMessageStatus("failed", (FakeRecipient("failed"),)),
         }
     )
-    summary = reconcile_outbox_once(port, sender, now=NOW)
+    summary = _reconcile(port, sender, now=NOW)
     assert summary.claimed == 3
     assert summary.applied == 3
     assert port.get("sent-item").status == STATUS_SENT
@@ -518,7 +575,7 @@ def test_reconcile_mixed_failed_and_sent_stays_sent() -> None:
             )
         }
     )
-    reconcile_outbox_once(port, sender, now=NOW)
+    _reconcile(port, sender, now=NOW)
     assert port.get("item-1").status == STATUS_SENT
     assert port.get("item-1").last_reconciled_at == NOW
 
@@ -528,9 +585,9 @@ def test_reconcile_always_advances_last_reconciled_at_when_still_sent() -> None:
     port.put(_accepted())
     sender = FakeSender(messages={"msg-1": FakeMessageStatus("sending", (FakeRecipient("sent"),))})
     first = NOW
-    reconcile_outbox_once(port, sender, now=first)
+    _reconcile(port, sender, now=first)
     later = first + timedelta(minutes=1)
-    reconcile_outbox_once(port, sender, now=later)
+    _reconcile(port, sender, now=later)
     item = port.get("item-1")
     assert item.status == STATUS_SENT
     assert item.last_reconciled_at == later
@@ -549,7 +606,7 @@ def test_sent_item_older_than_24h_stays_sent_and_leaves_reconcile_queue() -> Non
         sent_at=sent_at,
     )
     sender = FakeSender(messages={"msg-1": FakeMessageStatus("completed", (FakeRecipient("delivered"),))})
-    summary = reconcile_outbox_once(port, sender, now=NOW)
+    summary = _reconcile(port, sender, now=NOW)
     assert summary.claimed == 0
     assert sender.get_calls == []
     item = port.get("item-1")
@@ -570,7 +627,7 @@ def test_sent_item_within_24h_can_become_delivered() -> None:
         sent_at=sent_at,
     )
     sender = FakeSender(messages={"msg-1": FakeMessageStatus("completed", (FakeRecipient("delivered"),))})
-    reconcile_outbox_once(port, sender, now=NOW)
+    _reconcile(port, sender, now=NOW)
     assert port.get("item-1").status == STATUS_DELIVERED
 
 
@@ -587,7 +644,7 @@ def test_reconcile_does_not_infer_delivered_from_age_alone() -> None:
         sent_at=sent_at,
     )
     sender = FakeSender(messages={"msg-1": FakeMessageStatus("completed", (FakeRecipient("sent"),))})
-    reconcile_outbox_once(port, sender, now=NOW)
+    _reconcile(port, sender, now=NOW)
     assert port.get("item-1").status == STATUS_SENT
 
 
@@ -607,7 +664,7 @@ def test_claim_reconcile_prefers_longest_unreconciled() -> None:
     port.put(newer)
     port.put(older)
     port.put(never)
-    order = [item.id for item in port.claim_reconcile_due(2, NOW)]
+    order = [item.id for item in port.claim_reconcile_due(2, NOW, 30, "worker-a")]
     assert order == ["never", "old"]
 
 
@@ -620,8 +677,102 @@ def test_process_then_reconcile_end_to_end() -> None:
     )
     process_outbox_once(port, sender, now=NOW, owner="worker-a")
     assert port.get("item-1").status == STATUS_ACCEPTED
-    reconcile_outbox_once(port, sender, now=NOW + timedelta(seconds=5))
+    _reconcile(port, sender, now=NOW + timedelta(seconds=5))
     assert port.get("item-1").status == STATUS_ACCEPTED
     sender.messages["msg-1"] = FakeMessageStatus("completed", (FakeRecipient("delivered"),))
-    reconcile_outbox_once(port, sender, now=NOW + timedelta(minutes=2))
+    _reconcile(port, sender, now=NOW + timedelta(minutes=2))
     assert port.get("item-1").status == STATUS_DELIVERED
+
+
+def test_process_dedup_key_mismatch_fails_without_send() -> None:
+    port = InMemoryOutbox()
+    port.put(replace(_queued(), payload=FakeNotifyRequest(dedup_key="other-key")))
+    sender = FakeSender(send=FakeSendResult(message_id="msg-1", accepted=True))
+    summary = _process(port, sender)
+    assert summary == ProcessSummary(claimed=1, accepted=0, retried=0, failed=1)
+    assert sender.send_calls == []
+    item = port.get("item-1")
+    assert item.status == STATUS_FAILED
+    assert item.last_error == ERROR_DEDUP_KEY_MISMATCH
+
+
+def test_stale_lease_retry_does_not_clobber_newer_owner() -> None:
+    port = InMemoryOutbox()
+    port.put(_queued())
+    worker_a = port.claim_due(1, NOW, 30, "worker-a")
+    a_token = worker_a[0].lease_token
+    assert a_token
+    later = NOW + timedelta(seconds=30)
+    worker_b = port.claim_due(1, later, 30, "worker-b")
+    b_token = worker_b[0].lease_token
+    assert b_token
+    assert b_token != a_token
+    assert port.mark_accepted("item-1", "msg-b", later, b_token) is True
+    assert port.mark_retry("item-1", later + timedelta(minutes=1), ERROR_UNAVAILABLE, a_token) is False
+    item = port.get("item-1")
+    assert item.status == STATUS_ACCEPTED
+    assert item.provider_message_id == "msg-b"
+    assert item.attempt_count == 0
+    assert item.last_error is None
+
+
+def test_apply_provider_status_keeps_delivered_against_stale_sent() -> None:
+    port = InMemoryOutbox()
+    port.put(_accepted())
+    claimed = port.claim_reconcile_due(1, NOW, 30, "worker-a")
+    token = claimed[0].lease_token
+    assert token is not None
+    delivered = FakeMessageStatus("completed", (FakeRecipient("delivered"),))
+    stale_sent = FakeMessageStatus("completed", (FakeRecipient("sent"),))
+    assert port.apply_provider_status("item-1", delivered, NOW, token) is True
+    assert port.get("item-1").status == STATUS_DELIVERED
+    later = NOW + timedelta(seconds=1)
+    assert port.apply_provider_status("item-1", stale_sent, later, token) is True
+    item = port.get("item-1")
+    assert item.status == STATUS_DELIVERED
+    assert item.last_reconciled_at == later
+
+
+def test_reconcile_continues_after_first_item_error() -> None:
+    port = InMemoryOutbox()
+    port.put(_accepted("item-1", "msg-1"))
+    port.put(_accepted("item-2", "msg-2"))
+
+    class PartialSender(FakeSender):
+        def get_message(self, message_id: str) -> FakeMessageStatus:
+            self.get_calls.append(message_id)
+            if message_id == "msg-1":
+                raise RuntimeError("upstream boom")
+            return FakeMessageStatus("completed", (FakeRecipient("delivered"),))
+
+    summary = _reconcile(port, PartialSender())
+    assert summary.claimed == 2
+    assert summary.applied == 1
+    first = port.get("item-1")
+    assert first.status == STATUS_ACCEPTED
+    assert first.last_reconciled_at == NOW
+    assert first.last_error == "upstream boom"
+    assert first.lease_owner is None
+    assert port.get("item-2").status == STATUS_DELIVERED
+
+
+def test_reconcile_provider_404_marks_message_missing() -> None:
+    port = InMemoryOutbox()
+    port.put(_accepted("gone", "msg-gone"))
+    port.put(_accepted("ok", "msg-ok"))
+
+    class MissingThenOk(FakeSender):
+        def get_message(self, message_id: str) -> FakeMessageStatus:
+            self.get_calls.append(message_id)
+            if message_id == "msg-gone":
+                raise NotifyRejectedError("not found", status=404)
+            return FakeMessageStatus("completed", (FakeRecipient("delivered"),))
+
+    summary = _reconcile(port, MissingThenOk())
+    assert summary.claimed == 2
+    assert summary.applied == 1
+    missing = port.get("gone")
+    assert missing.status == STATUS_FAILED
+    assert missing.last_error == ERROR_PROVIDER_MESSAGE_MISSING
+    assert port.get("ok").status == STATUS_DELIVERED
+

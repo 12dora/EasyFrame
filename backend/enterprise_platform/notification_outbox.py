@@ -48,10 +48,12 @@ PROVIDER_RECIPIENT_DELIVERED = "delivered"
 PROVIDER_RECIPIENT_FAILED = "failed"
 
 ERROR_DEDUP_CONFLICT = "dedup_conflict"
+ERROR_DEDUP_KEY_MISMATCH = "dedup_key_mismatch"
 ERROR_REJECTED = "rejected"
 ERROR_THROTTLED = "throttled"
 ERROR_UNAVAILABLE = "unavailable"
 ERROR_EXHAUSTED = "exhausted"
+ERROR_PROVIDER_MESSAGE_MISSING = "provider_message_missing"
 
 DEFAULT_PROCESS_LIMIT = 50
 DEFAULT_LEASE_SECONDS = 30
@@ -72,6 +74,29 @@ _PROVIDER_RECIPIENT_TO_LOCAL = {
 
 _LOCAL_RECIPIENT_STATUSES = frozenset({STATUS_ACCEPTED, STATUS_SENT, STATUS_DELIVERED, STATUS_FAILED})
 
+_TERMINAL_OUTBOX_STATUSES = frozenset({STATUS_DELIVERED, STATUS_FAILED})
+
+_STATUS_PROGRESS = {
+    STATUS_ACCEPTED: 0,
+    STATUS_SENT: 1,
+    STATUS_DELIVERED: 2,
+    STATUS_FAILED: 2,
+}
+
+
+class StaleLeaseError(Exception):
+    """租约令牌已与行上的值不一致;调用方应视为他人已接管,不得再写该行。"""
+
+
+class OutboxNotifyPayload(Protocol):
+    """F1 ``NotifyRequest`` 的结构子集。
+
+    宿主必须把同一 ``dedup_key`` 同时写入 ``OutboxItem.dedup_key`` 与
+    ``payload.dedup_key``;``process_outbox_once`` 在两者不一致时拒绝发送。
+    """
+
+    dedup_key: str | None
+
 
 @dataclass(frozen=True, slots=True)
 class OutboxItem:
@@ -79,7 +104,7 @@ class OutboxItem:
 
     id: str
     dedup_key: str
-    payload: object
+    payload: OutboxNotifyPayload
     status: str
     attempt_count: int
     next_attempt_at: datetime | None
@@ -88,6 +113,7 @@ class OutboxItem:
     lease_owner: str | None
     lease_expires_at: datetime | None
     last_reconciled_at: datetime | None
+    lease_token: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,27 +162,49 @@ class NotifyMessageStatusView(Protocol):
 class NotifySender(Protocol):
     """发送/查询协议。F1 ``NotifyClient`` 同名方法即可满足,无需继承。"""
 
-    def send(self, request: object) -> NotifySendResultView: ...
+    def send(self, request: OutboxNotifyPayload) -> NotifySendResultView: ...
 
     def get_message(self, message_id: str) -> NotifyMessageStatusView: ...
 
 
 class NotificationOutboxPort(Protocol):
-    """宿主持久化边界。认领语义由宿主用行锁实现,内核只约定方法。"""
+    """宿主持久化边界。认领语义由宿主用行锁实现,内核只约定方法。
+
+    SQL 宿主必须把租约令牌写进行,并用它做每次回写的栅栏,内核假定:
+
+    - ``claim_due`` / ``claim_reconcile_due`` 一次原子认领:
+      ``UPDATE ... SET lease_token=?, lease_owner=?, lease_expires_at=?
+      WHERE (lease_expires_at IS NULL OR lease_expires_at < :now)
+      RETURNING ...`` 并配合 ``FOR UPDATE SKIP LOCKED``。
+      ``lease_token`` 由端口在认领时生成,随 ``OutboxItem`` 返回。
+    - 每一次 ``mark_accepted`` / ``mark_retry`` / ``mark_failed`` /
+      ``mark_reconcile_error`` / ``apply_provider_status`` / ``release``:
+      ``UPDATE ... WHERE id=:id AND lease_token=:lease_token``。
+      影响行数为 0 时必须 no-op:返回 ``False`` 或抛 ``StaleLeaseError``。
+      驱动把陈旧结果当作「他人已接管」,不再对该条目继续写。
+    - ``apply_provider_status`` 必须单调:不得把 delivered/failed 回写成
+      sent/accepted;乱序观察只更新 ``last_reconciled_at``。
+    """
 
     def claim_due(self, limit: int, now: datetime, lease_seconds: int, owner: str) -> list[OutboxItem]: ...
 
-    def mark_accepted(self, id: str, message_id: str, now: datetime) -> None: ...
+    def mark_accepted(self, id: str, message_id: str, now: datetime, lease_token: str) -> bool: ...
 
-    def mark_retry(self, id: str, next_attempt_at: datetime, error: str) -> None: ...
+    def mark_retry(self, id: str, next_attempt_at: datetime, error: str, lease_token: str) -> bool: ...
 
-    def mark_failed(self, id: str, error: str, now: datetime) -> None: ...
+    def mark_failed(self, id: str, error: str, now: datetime, lease_token: str) -> bool: ...
 
-    def claim_reconcile_due(self, limit: int, now: datetime) -> list[OutboxItem]: ...
+    def claim_reconcile_due(
+        self, limit: int, now: datetime, lease_seconds: int, owner: str
+    ) -> list[OutboxItem]: ...
 
-    def apply_provider_status(self, id: str, status: NotifyMessageStatusView, now: datetime) -> None: ...
+    def apply_provider_status(
+        self, id: str, status: NotifyMessageStatusView, now: datetime, lease_token: str
+    ) -> bool: ...
 
-    def release(self, id: str) -> None: ...
+    def mark_reconcile_error(self, id: str, error: str, now: datetime, lease_token: str) -> bool: ...
+
+    def release(self, id: str, lease_token: str) -> bool: ...
 
 
 def backoff_delay(
@@ -234,6 +282,16 @@ def aggregate_local_status(recipient_statuses: Sequence[str]) -> AggregatedLocal
     return AggregatedLocalStatus(STATUS_ACCEPTED, partial=has_failed)
 
 
+def clamp_outbox_status(current: str, incoming: str) -> str:
+    """单调合并上游观察:不得把 delivered/failed 回写成 sent/accepted。"""
+
+    if current in _TERMINAL_OUTBOX_STATUSES:
+        return current
+    if _STATUS_PROGRESS.get(incoming, -1) < _STATUS_PROGRESS.get(current, -1):
+        return current
+    return incoming
+
+
 def sent_reconcile_expired(sent_at: datetime, now: datetime) -> bool:
     """``sent`` 满 24h 后不再进入对账队列,也不得推断为 delivered。"""
 
@@ -253,7 +311,11 @@ def process_outbox_once(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     jitter: Callable[[float], float] | None = None,
 ) -> ProcessSummary:
-    """认领到期条目并发送一次。202 与 200 ``accepted:false`` 都记为 accepted。"""
+    """认领到期条目并发送一次。202 与 200 ``accepted:false`` 都记为 accepted。
+
+    发送前校验 ``payload.dedup_key == item.dedup_key``;不一致则
+    ``mark_failed(dedup_key_mismatch)`` 且不 POST。
+    """
 
     _require_aware(now, name="now")
     if not owner:
@@ -270,21 +332,28 @@ def process_outbox_once(
     retried = 0
     failed = 0
     for item in claimed:
+        token = _require_lease_token(item)
+        if item.payload.dedup_key != item.dedup_key:
+            if _port_write(port.mark_failed, item.id, ERROR_DEDUP_KEY_MISMATCH, now, token):
+                failed += 1
+            continue
         try:
             result = client.send(item.payload)
         except Exception as exc:
-            outcome = _handle_send_failure(port, item, exc, now=now, max_attempts=max_attempts, jitter=jitter)
+            outcome = _handle_send_failure(
+                port, item, exc, now=now, max_attempts=max_attempts, jitter=jitter, lease_token=token
+            )
             if outcome == "fail":
                 failed += 1
-            else:
+            elif outcome == "retry":
                 retried += 1
             continue
         message_id = result.message_id
         if not message_id:
-            port.release(item.id)
+            _port_write(port.release, item.id, token)
             raise ValueError(f"NotifySender.send 必须返回 message_id,条目 {item.id}")
-        port.mark_accepted(item.id, message_id, now)
-        accepted += 1
+        if _port_write(port.mark_accepted, item.id, message_id, now, token):
+            accepted += 1
     return ProcessSummary(claimed=len(claimed), accepted=accepted, retried=retried, failed=failed)
 
 
@@ -293,21 +362,43 @@ def reconcile_outbox_once(
     client: NotifySender,
     *,
     now: datetime,
+    owner: str,
     limit: int = DEFAULT_PROCESS_LIMIT,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
 ) -> ReconcileSummary:
-    """轮询上游消息状态并写回。对账成功时必须推进 ``last_reconciled_at``。"""
+    """轮询上游消息状态并写回。对账成功时必须推进 ``last_reconciled_at``。
+
+    逐条捕获异常:普通错误走 ``mark_reconcile_error`` 后释放,继续其余条目;
+    上游消息不存在(F1 无 ``NotifyNotFoundError``,GET 404 为
+    ``NotifyRejectedError.status == 404``)则 ``mark_failed(provider_message_missing)``。
+    """
 
     _require_aware(now, name="now")
+    if not owner:
+        raise ValueError("owner 不能为空")
     if limit < 1:
         raise ValueError("limit 必须为正")
-    claimed = port.claim_reconcile_due(limit, now)
+    if lease_seconds < 1:
+        raise ValueError("lease_seconds 必须为正")
+
+    claimed = port.claim_reconcile_due(limit, now, lease_seconds, owner)
     applied = 0
     for item in claimed:
-        if not item.provider_message_id:
-            raise ValueError(f"待对账条目 {item.id} 缺少 provider_message_id")
-        message = client.get_message(item.provider_message_id)
-        port.apply_provider_status(item.id, message, now)
-        applied += 1
+        token = _require_lease_token(item)
+        try:
+            if not item.provider_message_id:
+                raise ValueError(f"待对账条目 {item.id} 缺少 provider_message_id")
+            message = client.get_message(item.provider_message_id)
+        except Exception as exc:
+            if _is_provider_message_missing(exc):
+                _port_write(port.mark_failed, item.id, ERROR_PROVIDER_MESSAGE_MISSING, now, token)
+            else:
+                _port_write(port.mark_reconcile_error, item.id, _reconcile_error_text(exc), now, token)
+            _port_write(port.release, item.id, token)
+            continue
+        if _port_write(port.apply_provider_status, item.id, message, now, token):
+            applied += 1
+        _port_write(port.release, item.id, token)
     return ReconcileSummary(claimed=len(claimed), applied=applied)
 
 
@@ -319,17 +410,22 @@ def _handle_send_failure(
     now: datetime,
     max_attempts: int,
     jitter: Callable[[float], float] | None,
-) -> SendDecision:
+    lease_token: str,
+) -> SendDecision | None:
     decision = classify_send_error(exc)
     if decision == "fail":
-        port.mark_failed(item.id, _fail_error_code(exc), now)
-        return "fail"
+        if _port_write(port.mark_failed, item.id, _fail_error_code(exc), now, lease_token):
+            return "fail"
+        return None
     next_attempt = item.attempt_count + 1
     if next_attempt >= max_attempts:
-        port.mark_failed(item.id, ERROR_EXHAUSTED, now)
-        return "fail"
-    port.mark_retry(item.id, _next_retry_at(now, next_attempt, exc, jitter), _retry_error_code(exc))
-    return "retry"
+        if _port_write(port.mark_failed, item.id, ERROR_EXHAUSTED, now, lease_token):
+            return "fail"
+        return None
+    next_at = _next_retry_at(now, next_attempt, exc, jitter)
+    if _port_write(port.mark_retry, item.id, next_at, _retry_error_code(exc), lease_token):
+        return "retry"
+    return None
 
 
 def _fail_error_code(exc: BaseException) -> str:
@@ -364,3 +460,30 @@ def _next_retry_at(
 def _require_aware(value: datetime, *, name: str) -> None:
     if value.tzinfo is None:
         raise ValueError(f"{name} 必须带时区")
+
+
+def _require_lease_token(item: OutboxItem) -> str:
+    if not item.lease_token:
+        raise ValueError(f"claim 必须返回 lease_token,条目 {item.id}")
+    return item.lease_token
+
+
+def _port_write(action: Callable[..., bool | None], *args: object) -> bool:
+    """执行一次带租约的写入;陈旧租约视为他人已接管,不再继续写。"""
+
+    try:
+        result = action(*args)
+    except StaleLeaseError:
+        return False
+    return result is not False
+
+
+def _is_provider_message_missing(exc: BaseException) -> bool:
+    """F1 未暴露 ``NotifyNotFoundError``;GET 404 映射为带 ``status`` 的 ``NotifyRejectedError``。"""
+
+    return isinstance(exc, NotifyRejectedError) and getattr(exc, "status", None) == 404
+
+
+def _reconcile_error_text(exc: BaseException) -> str:
+    text = str(exc).strip()
+    return text or type(exc).__name__

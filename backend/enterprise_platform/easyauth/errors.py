@@ -16,7 +16,14 @@ class NotifyDedupConflictError(NotifyError):
 
 
 class NotifyRejectedError(NotifyError):
-    """永久拒绝:HTTP 401 / 403 / 422,不得重试。"""
+    """永久拒绝:HTTP 401 / 403 / 422,以及查询时消息不存在的 404,不得重试。
+
+    F1 无独立 ``NotifyNotFoundError``;GET 404 同样抛本类且 ``status=404``。
+    """
+
+    def __init__(self, message: str = "", *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class NotifyThrottledError(NotifyError):
