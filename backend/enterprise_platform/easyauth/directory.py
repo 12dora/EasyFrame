@@ -15,6 +15,15 @@ from enterprise_platform.easyauth.credentials import (
     error_code_of,
     response_object,
 )
+from enterprise_platform.easyauth.types import (
+    DirectoryAccessError,
+    DirectorySnapshotDriftError,
+    DirectorySnapshotMeta,
+    DirectorySnapshotRead,
+    DirectorySnapshotScope,
+    DirectoryUnavailableError,
+    DirectoryUserRecord,
+)
 
 _USER_STATUSES = frozenset({"active", "disabled", "departed"})
 _MAX_PAGE_SIZE = 200
@@ -24,72 +33,12 @@ class DirectoryClientError(RuntimeError):
     pass
 
 
-class DirectoryAccessError(DirectoryClientError):
-    """401/403:凭据无效或未开通 directory 能力,不得重试。"""
-
-    def __init__(self, status: int, code: str, message: str = "") -> None:
-        super().__init__(message or f"EasyAuth directory 拒绝访问 HTTP {status} {code}".strip())
-        self.status = status
-        self.code = code
-
-
-class DirectoryUnavailableError(DirectoryClientError):
-    """网络 / 5xx / 429:可稍后重试。"""
-
-
-class DirectorySnapshotDriftError(DirectoryClientError):
-    """分页期间快照变化,且已用尽重启次数。"""
-
-
 class DirectoryInconsistentSnapshotError(DirectoryClientError):
     """单次读取内部不一致(重复 user_ref、total 对不上、snapshot_id 漂移)。"""
 
 
 class _SnapshotConflictError(Exception):
     """服务端 409:本轮页必须丢弃,由调用方决定是否重启。"""
-
-
-@dataclass(frozen=True)
-class DirectoryUserRecord:
-    user_ref: str
-    user_id: str | None
-    source_slug: str
-    corp_id: str
-    dingtalk_user_id: str
-    name: str
-    email: str
-    mobile: str
-    employee_number: str
-    title: str
-    status: str
-    active: bool
-    department_refs: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class DirectorySnapshotScope:
-    source_slug: str
-    corp_id: str
-    generation: int
-    status: str
-    snapshot_at: str | None
-    snapshot_at_status: str
-    stale: bool
-
-
-@dataclass(frozen=True)
-class DirectorySnapshotMeta:
-    snapshot_id: str
-    complete: bool
-    stale: bool
-    authoritative: bool
-    scopes: tuple[DirectorySnapshotScope, ...]
-
-
-@dataclass(frozen=True)
-class DirectorySnapshotRead:
-    users: tuple[DirectoryUserRecord, ...]
-    snapshot: DirectorySnapshotMeta
 
 
 @dataclass(frozen=True)

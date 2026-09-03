@@ -776,3 +776,61 @@ def test_reconcile_provider_404_marks_message_missing() -> None:
     assert missing.last_error == ERROR_PROVIDER_MESSAGE_MISSING
     assert port.get("ok").status == STATUS_DELIVERED
 
+
+def test_notify_client_satisfies_sender() -> None:
+    import httpx
+
+    from enterprise_platform.easyauth import EasyAuthCredential, NotifyClient, NotifyRequest
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/apps/easytrade/notify/messages"
+        return httpx.Response(
+            202,
+            json={
+                "message_id": "msg-client",
+                "accepted": True,
+                "status": "pending",
+                "recipient_total": 1,
+                "recipient_rejected": 0,
+            },
+        )
+
+    payload = NotifyRequest(
+        recipients=("dt:v1:demo",),
+        template="text",
+        content="hello",
+        dedup_key="dedup-1",
+    )
+    port = InMemoryOutbox()
+    port.put(
+        OutboxItem(
+            id="item-1",
+            dedup_key="dedup-1",
+            payload=payload,
+            status=STATUS_QUEUED,
+            attempt_count=0,
+            next_attempt_at=None,
+            provider_message_id=None,
+            last_error=None,
+            lease_owner=None,
+            lease_expires_at=None,
+            last_reconciled_at=None,
+            lease_token=None,
+        )
+    )
+    client = NotifyClient(
+        EasyAuthCredential(
+            base_url="https://easyauth.example.test",
+            app_key="easytrade",
+            auth_mode="static_app_token",
+            credential="eat_notify_test",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    summary = process_outbox_once(port, client, now=NOW, owner="worker-a")
+    assert summary == ProcessSummary(claimed=1, accepted=1, retried=0, failed=0)
+    item = port.get("item-1")
+    assert item.status == STATUS_ACCEPTED
+    assert item.provider_message_id == "msg-client"
+

@@ -349,7 +349,6 @@ class IdentityDiscoveryResponse(PlatformModel):
 
 DirectoryAuthMode = Literal["static_app_token", "oauth_client_credentials"]
 DirectorySyncStatus = Literal["completed", "not_authoritative", "drift", "failed", "not_configured"]
-NotificationDeliveryState = Literal["queued", "accepted", "sent", "delivered", "failed", "superseded"]
 
 
 class DirectorySyncResult(PlatformModel):
@@ -401,19 +400,6 @@ class DirectorySettingsUpdate(StrictPlatformModel):
         from enterprise_platform.urls import validate_endpoint_url
 
         return validate_endpoint_url(value)
-
-
-class NotificationDeliveryStatus(PlatformModel):
-    """宿主单据可内嵌的通知投递状态；不代表已读。"""
-
-    status: NotificationDeliveryState
-    accepted_at: datetime | None = None
-    sent_at: datetime | None = None
-    delivered_at: datetime | None = None
-    last_error: str | None = None
-    provider_message_id: str | None = None
-    recipient_count: int = 0
-    last_reconciled_at: datetime | None = None
 
 
 class MyGrantResponse(PlatformModel):

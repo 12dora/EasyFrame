@@ -6,6 +6,8 @@ F1 的 ``NotifyClient`` 必须抛出本模块的同类异常,F3 的 outbox 驱�
 
 from __future__ import annotations
 
+from enterprise_platform.easyauth.credentials import EasyAuthProtocolError
+
 
 class NotifyError(Exception):
     """通知通道失败的基类。"""
@@ -21,9 +23,10 @@ class NotifyRejectedError(NotifyError):
     F1 无独立 ``NotifyNotFoundError``;GET 404 同样抛本类且 ``status=404``。
     """
 
-    def __init__(self, message: str = "", *, status: int | None = None) -> None:
+    def __init__(self, message: str = "", *, status: int | None = None, code: str = "") -> None:
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 class NotifyThrottledError(NotifyError):
@@ -40,3 +43,7 @@ class NotifyThrottledError(NotifyError):
 
 class NotifyUnavailableError(NotifyError):
     """网络故障或 HTTP 5xx / 503,稍后可重试。"""
+
+
+class NotifyProtocolError(NotifyUnavailableError, EasyAuthProtocolError):
+    """成功响应体畸形:协议错误,可稍后重试,不得当永久拒绝。"""

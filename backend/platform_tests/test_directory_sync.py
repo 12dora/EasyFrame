@@ -29,8 +29,10 @@ def _user(**overrides) -> DirectoryUserRecord:
         "email": "keep@example.com",
         "mobile": "13800000000",
         "employee_number": "ET-001",
+        "title": "工程师",
         "status": "active",
         "active": True,
+        "department_refs": ("dept:v1:keep",),
     }
     payload.update(overrides)
     return DirectoryUserRecord(**payload)
@@ -291,6 +293,74 @@ def test_known_directory_unavailable_error_detail_omits_raw_text() -> None:
     assert result.error_detail == "DirectoryUnavailableError: 目录暂不可用"
     assert "keep@example.com" not in (result.error_detail or "")
     assert port.calls == ["rollback"]
+
+
+def test_directory_client_satisfies_snapshot_reader() -> None:
+    import httpx
+
+    from enterprise_platform.easyauth import DirectoryClient, EasyAuthCredential
+
+    user = _user()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/apps/easytrade/directory/users"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "user_ref": user.user_ref,
+                        "user_id": user.user_id,
+                        "source_slug": user.source_slug,
+                        "corp_id": user.corp_id,
+                        "dingtalk_user_id": user.dingtalk_user_id,
+                        "name": user.name,
+                        "title": user.title,
+                        "email": user.email,
+                        "mobile": user.mobile,
+                        "employee_number": user.employee_number,
+                        "status": user.status,
+                        "active": user.active,
+                        "departments": [{"department_ref": user.department_refs[0]}],
+                    }
+                ],
+                "pagination": {"page": 1, "page_size": 200, "total_items": 1, "total_pages": 1},
+                "directory_snapshot": {
+                    "snapshot_id": "snap-1",
+                    "complete": True,
+                    "stale": False,
+                    "authoritative": True,
+                    "snapshots": [
+                        {
+                            "source_slug": "dingtalk",
+                            "corp_id": "corp-demo",
+                            "generation": 1,
+                            "status": "success",
+                            "snapshot_at": "2026-09-04T04:00:00+00:00",
+                            "snapshot_at_status": "valid",
+                            "stale": False,
+                        }
+                    ],
+                },
+            },
+        )
+
+    client = DirectoryClient(
+        EasyAuthCredential(
+            base_url="https://easyauth.example.test",
+            app_key="easytrade",
+            auth_mode="static_app_token",
+            credential="eat_directory_test",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    port = InMemoryProjectionPort()
+    result = run_directory_sync(client, port, actor_id="actor-1", clock=lambda: SYNC_AT)
+    assert result.status == "completed"
+    assert result.snapshot_id == "snap-1"
+    assert result.created == 1
+    assert port.committed is True
+    assert port.users[user.user_ref].department_refs == user.department_refs
 
 
 def _admin_headers(client):

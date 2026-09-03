@@ -10,6 +10,7 @@ import pytest
 
 from enterprise_platform.easyauth import (
     EasyAuthCredential,
+    EasyAuthProtocolError,
     NotifyClient,
     NotifyDedupConflictError,
     NotifyProtocolError,
@@ -236,6 +237,7 @@ def test_send_truncated_202_is_protocol_error() -> None:
     with pytest.raises(NotifyProtocolError) as captured:
         _client(handler).send(_request())
     assert isinstance(captured.value, NotifyUnavailableError)
+    assert isinstance(captured.value, EasyAuthProtocolError)
     assert not isinstance(captured.value, NotifyRejectedError)
 
 
@@ -246,6 +248,7 @@ def test_get_message_malformed_status_body_is_protocol_error() -> None:
     with pytest.raises(NotifyProtocolError) as captured:
         _client(handler).get_message(MESSAGE_ID)
     assert isinstance(captured.value, NotifyUnavailableError)
+    assert isinstance(captured.value, EasyAuthProtocolError)
     assert not isinstance(captured.value, NotifyRejectedError)
 
 

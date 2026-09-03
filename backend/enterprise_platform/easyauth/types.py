@@ -12,22 +12,14 @@ class DirectorySnapshotDriftError(Exception):
 class DirectoryAccessError(Exception):
     """401/403：凭据无效或未开通 directory 能力，不得重试。"""
 
+    def __init__(self, status: int, code: str, message: str = "") -> None:
+        super().__init__(message or f"EasyAuth directory 拒绝访问 HTTP {status} {code}".strip())
+        self.status = status
+        self.code = code
+
 
 class DirectoryUnavailableError(Exception):
     """网络 / 5xx / 429：目录暂不可用。"""
-
-
-class EasyAuthCredentialError(Exception):
-    """凭据缺失或 auth_mode 无法解析 Bearer。"""
-
-
-@dataclass(frozen=True)
-class DirectoryDepartmentRecord:
-    department_ref: str
-    department_id: str = ""
-    source_slug: str = ""
-    corp_id: str = ""
-    name: str = ""
 
 
 @dataclass(frozen=True)
@@ -43,15 +35,14 @@ class DirectoryUserRecord:
     email: str
     mobile: str
     employee_number: str
+    title: str
     status: str
     active: bool
-    departments: tuple[DirectoryDepartmentRecord, ...] = ()
-    title: str = ""
-    avatar_url: str = ""
+    department_refs: tuple[str, ...]
 
 
 @dataclass(frozen=True)
-class DirectorySourceSnapshot:
+class DirectorySnapshotScope:
     source_slug: str
     corp_id: str
     generation: int
@@ -69,7 +60,7 @@ class DirectorySnapshotMeta:
     complete: bool
     stale: bool
     authoritative: bool
-    snapshots: tuple[DirectorySourceSnapshot, ...] = ()
+    scopes: tuple[DirectorySnapshotScope, ...] = ()
 
 
 @dataclass(frozen=True)

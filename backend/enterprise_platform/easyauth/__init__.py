@@ -11,29 +11,33 @@ from enterprise_platform.easyauth.credentials import (
     resolve_bearer_token,
 )
 from enterprise_platform.easyauth.directory import (
-    DirectoryAccessError,
     DirectoryClient,
     DirectoryClientError,
     DirectoryInconsistentSnapshotError,
+)
+from enterprise_platform.easyauth.errors import (
+    NotifyDedupConflictError,
+    NotifyError,
+    NotifyProtocolError,
+    NotifyRejectedError,
+    NotifyThrottledError,
+    NotifyUnavailableError,
+)
+from enterprise_platform.easyauth.notify import (
+    NotifyClient,
+    NotifyMessageStatus,
+    NotifyRecipientStatus,
+    NotifyRequest,
+    NotifySendResult,
+)
+from enterprise_platform.easyauth.types import (
+    DirectoryAccessError,
     DirectorySnapshotDriftError,
     DirectorySnapshotMeta,
     DirectorySnapshotRead,
     DirectorySnapshotScope,
     DirectoryUnavailableError,
     DirectoryUserRecord,
-)
-from enterprise_platform.easyauth.notify import (
-    NotifyClient,
-    NotifyClientError,
-    NotifyDedupConflictError,
-    NotifyMessageStatus,
-    NotifyProtocolError,
-    NotifyRecipientStatus,
-    NotifyRejectedError,
-    NotifyRequest,
-    NotifySendResult,
-    NotifyThrottledError,
-    NotifyUnavailableError,
 )
 
 __all__ = [
@@ -53,8 +57,8 @@ __all__ = [
     "EasyAuthProtocolError",
     "EasyAuthTransportError",
     "NotifyClient",
-    "NotifyClientError",
     "NotifyDedupConflictError",
+    "NotifyError",
     "NotifyMessageStatus",
     "NotifyProtocolError",
     "NotifyRecipientStatus",

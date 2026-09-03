@@ -17,42 +17,16 @@ from enterprise_platform.easyauth.credentials import (
     parse_retry_after_seconds,
     response_object,
 )
+from enterprise_platform.easyauth.errors import (
+    NotifyDedupConflictError,
+    NotifyProtocolError,
+    NotifyRejectedError,
+    NotifyThrottledError,
+    NotifyUnavailableError,
+)
 
 _SUCCESS_STATUSES = frozenset({200, 202})
 _PERMANENT_STATUSES = frozenset({401, 403, 422})
-
-
-class NotifyClientError(RuntimeError):
-    pass
-
-
-class NotifyDedupConflictError(NotifyClientError):
-    """409:同一 dedup_key 载荷不同。"""
-
-
-class NotifyRejectedError(NotifyClientError):
-    """401/403/422:永久失败,不得重试。"""
-
-    def __init__(self, status: int, code: str, message: str = "") -> None:
-        super().__init__(message or f"EasyAuth notify 永久拒绝 HTTP {status} {code}".strip())
-        self.status = status
-        self.code = code
-
-
-class NotifyThrottledError(NotifyClientError):
-    """429:按 Retry-After 退避。"""
-
-    def __init__(self, retry_after: int | None) -> None:
-        super().__init__("EasyAuth notify 被限流")
-        self.retry_after = retry_after
-
-
-class NotifyUnavailableError(NotifyClientError):
-    """网络 / 5xx / 503:可稍后重试。"""
-
-
-class NotifyProtocolError(NotifyUnavailableError):
-    """成功响应体畸形:协议错误,可稍后重试,不得当永久拒绝。"""
 
 
 @dataclass(frozen=True)
@@ -166,13 +140,21 @@ def _raise_notify_error(response: httpx.Response) -> NoReturn:
     if status == 409:
         raise NotifyDedupConflictError(f"EasyAuth notify dedup_key 冲突 {code}".strip())
     if status in _PERMANENT_STATUSES:
-        raise NotifyRejectedError(status, code)
+        raise NotifyRejectedError(
+            f"EasyAuth notify 永久拒绝 HTTP {status} {code}".strip(),
+            status=status,
+            code=code,
+        )
     if status == 429:
         raise NotifyThrottledError(parse_retry_after_seconds(response))
     if status == 503 or status >= 500:
         raise NotifyUnavailableError(f"EasyAuth notify 返回 HTTP {status} {code}".strip())
     if status >= 400:
-        raise NotifyRejectedError(status, code)
+        raise NotifyRejectedError(
+            f"EasyAuth notify 永久拒绝 HTTP {status} {code}".strip(),
+            status=status,
+            code=code,
+        )
     raise NotifyUnavailableError(f"EasyAuth notify 返回 HTTP {status}")
 
 

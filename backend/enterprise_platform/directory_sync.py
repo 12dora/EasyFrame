@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Protocol
 
+from enterprise_platform.easyauth.credentials import EasyAuthCredentialError
 from enterprise_platform.easyauth.types import (
     DirectoryAccessError,
     DirectorySnapshotDriftError,
@@ -14,7 +15,6 @@ from enterprise_platform.easyauth.types import (
     DirectorySnapshotRead,
     DirectoryUnavailableError,
     DirectoryUserRecord,
-    EasyAuthCredentialError,
 )
 from enterprise_platform.ports import DirectoryProjectionPort
 from enterprise_platform.schemas import DirectorySyncResult, DirectorySyncStatus
