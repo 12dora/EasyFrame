@@ -20,12 +20,16 @@ line-length = 120
 extend = "ruff-gates.toml"
 
 [tool.ruff.lint.extend-per-file-ignores]
+# 目录型豁免必须写在本仓:ruff-gates.toml 的 glob 锚在片段目录,extend 到下游不会命中宿主路径。
 # FastAPI 要求 Depends()/Query() 做默认值,B008 不适用;本仓路由不在 api/ 目录下。
 "enterprise_platform/**/*.py" = ["B008"]
 "blank_app/**/*.py" = ["B008"]
-# Alembic 迁移文件是生成的,保持原有导入风格
-"blank_app/alembic/versions/*.py" = ["I001", "UP007", "UP035"]
+# 测试是线性 arrange/act/assert,语句多/参数多不等于难维护;圈复杂度仍然管。
+"platform_tests/**" = ["PLR0915", "PLR0913"]
+# Alembic 迁移文件是生成的,保持原有导入风格;upgrade() 经常是长段 DDL,语句数豁免。
+"blank_app/alembic/versions/*.py" = ["I001", "UP007", "UP035", "PLR0915"]
 
 [tool.pytest.ini_options]
 testpaths = ["platform_tests"]
 asyncio_mode = "auto"
+pythonpath = ["."]

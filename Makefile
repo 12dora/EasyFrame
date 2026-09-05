@@ -87,6 +87,7 @@ lint:
 	cd backend && $(RUFF) check --ignore $(RUFF_RATCHET_IGNORE) .
 	cd backend && $(RUFF) format --check .
 	cd backend && $(PYTHON) -m tools.quality_gates.runner --repo $(REPO_ROOT) --config gates.json
+	cd backend && PYTHONPATH=. uv tool run pytest@9.1.1 -q platform_tests/test_quality_gate_*.py
 
 lint-fix:
 	cd backend && $(RUFF) check --select RUF100 --fix .

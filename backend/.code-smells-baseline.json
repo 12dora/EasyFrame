@@ -2,43 +2,53 @@
   "_comment": "代码气味存量基线,只允许变小。用 python -m tools.quality_gates.runner --update 收紧。",
   "rules": {
     "C901": {
-      "backend/enterprise_platform/assembly.py": [
-        22,
-        18,
-        15,
-        13,
-        12
-      ],
-      "backend/enterprise_platform/authorization.py": [
-        19
-      ],
-      "backend/enterprise_platform/authz/client.py": [
-        11
-      ],
-      "backend/enterprise_platform/local_accounts.py": [
-        14
-      ],
-      "backend/enterprise_platform/notification_outbox.py": [
+      "backend/enterprise_platform/assembly.py::_apply_route_groups": [
         13
       ],
-      "backend/enterprise_platform/oidc.py": [
+      "backend/enterprise_platform/assembly.py::_apply_route_groups.enabled": [
+        12
+      ],
+      "backend/enterprise_platform/assembly.py::_register_account_self_service_routes": [
+        18
+      ],
+      "backend/enterprise_platform/assembly.py::_register_integration_and_ops_routes": [
+        15
+      ],
+      "backend/enterprise_platform/assembly.py::create_platform_router": [
+        22
+      ],
+      "backend/enterprise_platform/authorization.py::create_authorization_operations_router": [
+        19
+      ],
+      "backend/enterprise_platform/authz/client.py::EasyAuthPermissionClient.fetch_permission_snapshot": [
+        11
+      ],
+      "backend/enterprise_platform/local_accounts.py::create_local_accounts_router": [
+        14
+      ],
+      "backend/enterprise_platform/notification_outbox.py::process_outbox_once": [
+        13
+      ],
+      "backend/enterprise_platform/oidc.py::create_oidc_router": [
         11
       ]
     },
     "PLR0911": {
-      "backend/enterprise_platform/assembly.py": [
+      "backend/enterprise_platform/assembly.py::_apply_route_groups.enabled": [
         12
       ]
     },
     "PLR0913": {
-      "backend/enterprise_platform/directory_sync.py": [
+      "backend/enterprise_platform/directory_sync.py::_result": [
         14
       ]
     },
     "PLR0915": {
-      "backend/enterprise_platform/assembly.py": [
-        59,
+      "backend/enterprise_platform/assembly.py::_register_account_self_service_routes": [
         54
+      ],
+      "backend/enterprise_platform/assembly.py::create_platform_router": [
+        59
       ]
     },
     "file-sloc": {
@@ -74,72 +84,100 @@
       ]
     },
     "function-sloc": {
-      "backend/blank_app/adapter_account.py": [
-        47,
+      "backend/blank_app/adapter_account.py::BlankAccountAdapter.complete_passkey_login": [
         43
       ],
-      "backend/blank_app/alembic/versions/0001_platform_core.py": [
+      "backend/blank_app/adapter_account.py::BlankAccountAdapter.complete_passkey_registration": [
+        47
+      ],
+      "backend/blank_app/alembic/versions/0001_platform_core.py::upgrade": [
         94
       ],
-      "backend/blank_app/authz_api.py": [
-        47,
-        44,
+      "backend/blank_app/authz_api.py::BlankAuthorizationOperations.list_snapshots": [
+        44
+      ],
+      "backend/blank_app/authz_api.py::_test_authorization_connection": [
         41
       ],
-      "backend/blank_app/authz_snapshot.py": [
-        71,
-        48,
-        41
-      ],
-      "backend/enterprise_platform/assembly.py": [
-        142,
-        133,
-        112,
-        45
-      ],
-      "backend/enterprise_platform/authorization.py": [
-        139
-      ],
-      "backend/enterprise_platform/directory_sync.py": [
-        73
-      ],
-      "backend/enterprise_platform/easyauth/directory.py": [
-        42
-      ],
-      "backend/enterprise_platform/jwks.py": [
+      "backend/blank_app/authz_api.py::resolve_trusted_principal": [
         47
       ],
-      "backend/enterprise_platform/local_accounts.py": [
-        85,
-        50,
-        47
-      ],
-      "backend/enterprise_platform/notification_outbox.py": [
+      "backend/blank_app/authz_snapshot.py::_commit_snapshot_row": [
         48
       ],
-      "backend/enterprise_platform/oidc.py": [
+      "backend/blank_app/authz_snapshot.py::refresh_account_snapshot": [
+        71
+      ],
+      "backend/blank_app/authz_snapshot.py::seed_platform_catalog": [
+        41
+      ],
+      "backend/enterprise_platform/assembly.py::_register_account_self_service_routes": [
+        133
+      ],
+      "backend/enterprise_platform/assembly.py::_register_footer_and_notification_routes": [
+        45
+      ],
+      "backend/enterprise_platform/assembly.py::_register_integration_and_ops_routes": [
+        142
+      ],
+      "backend/enterprise_platform/assembly.py::create_platform_router": [
+        112
+      ],
+      "backend/enterprise_platform/authorization.py::create_authorization_operations_router": [
+        139
+      ],
+      "backend/enterprise_platform/directory_sync.py::run_directory_sync": [
         73
       ],
-      "backend/enterprise_platform/safe_http.py": [
+      "backend/enterprise_platform/easyauth/directory.py::DirectoryClient._read_once": [
+        42
+      ],
+      "backend/enterprise_platform/jwks.py::probe_jwks": [
         47
       ],
-      "backend/enterprise_platform/trusted_http.py": [
-        53,
+      "backend/enterprise_platform/local_accounts.py::_LocalAccountService.create": [
+        50
+      ],
+      "backend/enterprise_platform/local_accounts.py::_LocalAccountService.set_permissions": [
+        47
+      ],
+      "backend/enterprise_platform/local_accounts.py::create_local_accounts_router": [
+        85
+      ],
+      "backend/enterprise_platform/notification_outbox.py::process_outbox_once": [
+        48
+      ],
+      "backend/enterprise_platform/oidc.py::create_oidc_router": [
+        73
+      ],
+      "backend/enterprise_platform/safe_http.py::guarded_request": [
+        47
+      ],
+      "backend/enterprise_platform/trusted_http.py::create_trusted_authority_transport": [
+        53
+      ],
+      "backend/enterprise_platform/trusted_http.py::create_trusted_authority_transport.request": [
         46
       ],
-      "backend/platform_tests/local_accounts_conformance.py": [
-        121,
+      "backend/platform_tests/local_accounts_conformance.py::check_crud_local_grants_cas_and_audit": [
+        121
+      ],
+      "backend/platform_tests/local_accounts_conformance.py::check_expiry_catalog_and_sso_visibility": [
         102
       ],
-      "backend/platform_tests/test_blank_app_api.py": [
+      "backend/platform_tests/test_blank_app_api.py::test_blank_backend_login_and_platform_contracts": [
         124
       ],
-      "backend/platform_tests/test_blank_authz_oidc.py": [
-        129,
-        94,
+      "backend/platform_tests/test_blank_authz_oidc.py::test_blank_authz_catalog_manifest_snapshot_refresh_and_fail_closed": [
+        129
+      ],
+      "backend/platform_tests/test_blank_authz_oidc.py::test_blank_identity_settings_operations_use_locked_server_base_url": [
+        94
+      ],
+      "backend/platform_tests/test_blank_authz_oidc.py::test_trusted_principal_uses_cached_grants_and_rejects_bad_signature": [
         84
       ],
-      "backend/platform_tests/test_local_accounts_batch4.py": [
+      "backend/platform_tests/test_local_accounts_batch4.py::test_expiry_tristate_promotion_version_and_catalog_projection": [
         83
       ]
     }
