@@ -2,21 +2,6 @@
   "_comment": "代码气味存量基线,只允许变小。用 python -m tools.quality_gates.runner --update 收紧。",
   "rules": {
     "C901": {
-      "backend/enterprise_platform/assembly.py::_apply_route_groups": [
-        13
-      ],
-      "backend/enterprise_platform/assembly.py::_apply_route_groups.enabled": [
-        12
-      ],
-      "backend/enterprise_platform/assembly.py::_register_account_self_service_routes": [
-        18
-      ],
-      "backend/enterprise_platform/assembly.py::_register_integration_and_ops_routes": [
-        15
-      ],
-      "backend/enterprise_platform/assembly.py::create_platform_router": [
-        22
-      ],
       "backend/enterprise_platform/authorization.py::create_authorization_operations_router": [
         19
       ],
@@ -33,22 +18,9 @@
         11
       ]
     },
-    "PLR0911": {
-      "backend/enterprise_platform/assembly.py::_apply_route_groups.enabled": [
-        12
-      ]
-    },
     "PLR0913": {
       "backend/enterprise_platform/directory_sync.py::_result": [
         14
-      ]
-    },
-    "PLR0915": {
-      "backend/enterprise_platform/assembly.py::_register_account_self_service_routes": [
-        54
-      ],
-      "backend/enterprise_platform/assembly.py::create_platform_router": [
-        59
       ]
     },
     "file-sloc": {
@@ -57,9 +29,6 @@
       ],
       "backend/blank_app/authz_api.py": [
         561
-      ],
-      "backend/enterprise_platform/assembly.py": [
-        629
       ],
       "backend/enterprise_platform/local_accounts.py": [
         689
@@ -110,18 +79,6 @@
       ],
       "backend/blank_app/authz_snapshot.py::seed_platform_catalog": [
         41
-      ],
-      "backend/enterprise_platform/assembly.py::_register_account_self_service_routes": [
-        133
-      ],
-      "backend/enterprise_platform/assembly.py::_register_footer_and_notification_routes": [
-        45
-      ],
-      "backend/enterprise_platform/assembly.py::_register_integration_and_ops_routes": [
-        142
-      ],
-      "backend/enterprise_platform/assembly.py::create_platform_router": [
-        112
       ],
       "backend/enterprise_platform/authorization.py::create_authorization_operations_router": [
         139
