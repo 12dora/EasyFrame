@@ -833,4 +833,3 @@ def test_notify_client_satisfies_sender() -> None:
     item = port.get("item-1")
     assert item.status == STATUS_ACCEPTED
     assert item.provider_message_id == "msg-client"
-

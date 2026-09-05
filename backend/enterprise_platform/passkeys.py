@@ -210,7 +210,7 @@ def _consume_challenge(challenge_consumer: ChallengeConsumer, jti: str) -> None:
         ok = bool(challenge_consumer(jti))
     except PasskeyError:
         raise
-    except Exception as exc:  # noqa: BLE001 — 宿主消费失败统一 fail-closed
+    except Exception as exc:  # 宿主消费失败统一 fail-closed
         raise PasskeyError("Passkey 挑战消费失败, 请重试", status_code=401) from exc
     if not ok:
         raise PasskeyError("Passkey 挑战无效或已使用, 请重试", status_code=401)

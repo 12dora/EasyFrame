@@ -183,6 +183,7 @@ class AuthzStatusResponse(PlatformModel):
     catalog: CountStatsResponse
     snapshots: SnapshotStatsResponse
 
+
 def resolve_trusted_principal(headers: dict[str, str]) -> str | None:
     principal = parse_upstream_principal_from_headers(
         headers,
@@ -237,6 +238,7 @@ def _current_user() -> CurrentUser:
     if user.must_change_password:
         raise AuthError(403, {"code": "PASSWORD_CHANGE_REQUIRED"})
     return user
+
 
 def test_easyauth_connection() -> ConnectionTestResult:
     return BlankIntegrationAdapter().test_easyauth()
@@ -363,6 +365,7 @@ def _my_grants(*, actor_id: str) -> list[MyGrantResponse]:
             )
             for grant in normalize_grants(snapshot.grants, _catalog_map(db))
         ]
+
 
 def _latency_ms(started: datetime) -> int:
     return int((datetime.now(UTC) - started).total_seconds() * 1000)

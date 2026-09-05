@@ -1,0 +1,21 @@
+{
+  "scan_roots": [
+    "backend/enterprise_platform",
+    "backend/blank_app",
+    "backend/platform_tests",
+    "backend/tools"
+  ],
+  "baseline": "backend/.code-smells-baseline.json",
+  "ruff_config": "backend/pyproject.toml",
+  "ruff_command": ["uv", "tool", "run", "ruff@0.16.2"],
+  "duplicate_window": 40,
+  "thresholds": {
+    "production_file": 500,
+    "route_file": 180,
+    "test_file": 400,
+    "fixture_file": 400,
+    "function": 40,
+    "migration": 60,
+    "test_function": 80
+  }
+}

@@ -35,6 +35,7 @@ COPY requirements.blank-test.txt .
 RUN pip install --no-cache-dir --requirement requirements.blank-test.txt \
     && python -m pip check
 COPY platform_tests/ platform_tests/
+COPY tools/ tools/
 
 USER blank
 

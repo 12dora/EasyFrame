@@ -1,0 +1,67 @@
+# EasyFrame 共享 ruff 门禁片段。下游在 pyproject 里写
+#   [tool.ruff]
+#   extend = "…/easyframe/backend/ruff-gates.toml"
+# 即可继承同一套规则与阈值;本仓自己的 backend/pyproject.toml 也 extend 本文件。
+#
+# PLR1702(嵌套块数)在 ruff 0.16.2 仍是 preview 规则,必须打开 lint.preview 才生效;
+# PLR0917 已 stable,不需要 preview。explicit-preview-rules 避免 E/F/B 等前缀选择
+# 把未稳定规则一并带进来。
+
+[lint]
+preview = true
+explicit-preview-rules = true
+select = [
+    "E",
+    "F",
+    "I",
+    "N",
+    "UP",
+    "B",
+    "C901",
+    "PLR0915",
+    "PLR0912",
+    "PLR0911",
+    "PLR1702",
+    "PLR0917",
+    "PLR0913",
+    "ERA001",
+    "T201",
+    "TD002",
+    "TD003",
+    "FIX001",
+    "FIX002",
+    "RUF100",
+]
+
+[lint.mccabe]
+# 圈复杂度上限;超过即 C901,存量走棘轮而不是 noqa。
+max-complexity = 10
+
+[lint.pylint]
+# 单函数语句数上限(docstring/空行/纯注释不计)。
+max-statements = 40
+# 单函数分支数上限。
+max-branches = 12
+# 单函数 return 次数上限。
+max-returns = 8
+# 单函数嵌套块数上限(PLR1702,preview)。
+max-nested-blocks = 5
+# 位置参数个数上限(PLR0917);keyword-only 不计入。
+max-positional-args = 8
+# 参数总个数上限(含 keyword-only,PLR0913)。
+max-args = 8
+
+[lint.per-file-ignores]
+# FastAPI 要求 Depends()/Query() 做默认值,B008 不适用;依赖注入参数也常超过 8 个。
+"**/api/**/*.py" = ["B008", "PLR0913"]
+# 测试是线性 arrange/act/assert,语句多/参数多不等于难维护;圈复杂度仍然管。
+"**/tests/**" = ["PLR0915", "PLR0913"]
+"**/platform_tests/**" = ["PLR0915", "PLR0913"]
+# 种子/清库/预检脚本用 print 汇报进度,不是调试残留。
+"**/seed*.py" = ["T201"]
+"**/wipe*.py" = ["T201"]
+"**/*preflight*.py" = ["T201"]
+# runner CLI 用 print 打表。
+"**/tools/quality_gates/runner.py" = ["T201"]
+# Alembic 迁移的 upgrade() 经常是长段 DDL,语句数豁免;圈复杂度仍然管。
+"**/alembic/versions/*.py" = ["PLR0915"]

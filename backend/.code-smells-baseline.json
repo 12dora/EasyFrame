@@ -1,0 +1,147 @@
+{
+  "_comment": "代码气味存量基线,只允许变小。用 python -m tools.quality_gates.runner --update 收紧。",
+  "rules": {
+    "C901": {
+      "backend/enterprise_platform/assembly.py": [
+        22,
+        18,
+        15,
+        13,
+        12
+      ],
+      "backend/enterprise_platform/authorization.py": [
+        19
+      ],
+      "backend/enterprise_platform/authz/client.py": [
+        11
+      ],
+      "backend/enterprise_platform/local_accounts.py": [
+        14
+      ],
+      "backend/enterprise_platform/notification_outbox.py": [
+        13
+      ],
+      "backend/enterprise_platform/oidc.py": [
+        11
+      ]
+    },
+    "PLR0911": {
+      "backend/enterprise_platform/assembly.py": [
+        12
+      ]
+    },
+    "PLR0913": {
+      "backend/enterprise_platform/directory_sync.py": [
+        14
+      ]
+    },
+    "PLR0915": {
+      "backend/enterprise_platform/assembly.py": [
+        59,
+        54
+      ]
+    },
+    "file-sloc": {
+      "backend/blank_app/adapter_account.py": [
+        699
+      ],
+      "backend/blank_app/authz_api.py": [
+        561
+      ],
+      "backend/enterprise_platform/assembly.py": [
+        629
+      ],
+      "backend/enterprise_platform/local_accounts.py": [
+        689
+      ],
+      "backend/platform_tests/local_accounts_conformance.py": [
+        608
+      ],
+      "backend/platform_tests/test_blank_authz_oidc.py": [
+        1294
+      ],
+      "backend/platform_tests/test_directory_sync.py": [
+        446
+      ],
+      "backend/platform_tests/test_local_accounts_batch3.py": [
+        434
+      ],
+      "backend/platform_tests/test_local_accounts_batch4.py": [
+        567
+      ],
+      "backend/platform_tests/test_notification_outbox.py": [
+        716
+      ]
+    },
+    "function-sloc": {
+      "backend/blank_app/adapter_account.py": [
+        47,
+        43
+      ],
+      "backend/blank_app/alembic/versions/0001_platform_core.py": [
+        94
+      ],
+      "backend/blank_app/authz_api.py": [
+        47,
+        44,
+        41
+      ],
+      "backend/blank_app/authz_snapshot.py": [
+        71,
+        48,
+        41
+      ],
+      "backend/enterprise_platform/assembly.py": [
+        142,
+        133,
+        112,
+        45
+      ],
+      "backend/enterprise_platform/authorization.py": [
+        139
+      ],
+      "backend/enterprise_platform/directory_sync.py": [
+        73
+      ],
+      "backend/enterprise_platform/easyauth/directory.py": [
+        42
+      ],
+      "backend/enterprise_platform/jwks.py": [
+        47
+      ],
+      "backend/enterprise_platform/local_accounts.py": [
+        85,
+        50,
+        47
+      ],
+      "backend/enterprise_platform/notification_outbox.py": [
+        48
+      ],
+      "backend/enterprise_platform/oidc.py": [
+        73
+      ],
+      "backend/enterprise_platform/safe_http.py": [
+        47
+      ],
+      "backend/enterprise_platform/trusted_http.py": [
+        53,
+        46
+      ],
+      "backend/platform_tests/local_accounts_conformance.py": [
+        121,
+        102
+      ],
+      "backend/platform_tests/test_blank_app_api.py": [
+        124
+      ],
+      "backend/platform_tests/test_blank_authz_oidc.py": [
+        129,
+        94,
+        84
+      ],
+      "backend/platform_tests/test_local_accounts_batch4.py": [
+        83
+      ]
+    }
+  }
+}

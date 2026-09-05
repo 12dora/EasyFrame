@@ -194,9 +194,7 @@ class NotificationOutboxPort(Protocol):
 
     def mark_failed(self, id: str, error: str, now: datetime, lease_token: str) -> bool: ...
 
-    def claim_reconcile_due(
-        self, limit: int, now: datetime, lease_seconds: int, owner: str
-    ) -> list[OutboxItem]: ...
+    def claim_reconcile_due(self, limit: int, now: datetime, lease_seconds: int, owner: str) -> list[OutboxItem]: ...
 
     def apply_provider_status(
         self, id: str, status: NotifyMessageStatusView, now: datetime, lease_token: str

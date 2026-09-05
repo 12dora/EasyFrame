@@ -1,4 +1,10 @@
-.PHONY: blank-preflight blank-up blank-down blank-build blank-image-audit blank-typecheck blank-e2e blank-check
+.PHONY: blank-preflight blank-up blank-down blank-build blank-image-audit blank-typecheck blank-e2e blank-check lint lint-fix
+
+REPO_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+RUFF ?= uv tool run ruff@0.16.2
+PYTHON ?= python3
+# 规模类规则走 runner 棘轮(基线只缩不涨),ruff check 只拦必须清零的规则。
+RUFF_RATCHET_IGNORE := C901,PLR0915,PLR0912,PLR0911,PLR1702,PLR0917,PLR0913
 
 BLANK_ENV_FILE ?= .env.blank
 BLANK_CHECK_ENV_FILE ?= .env.blank.example
@@ -76,3 +82,12 @@ blank-check:
 		curl --fail --silent --show-error "http://127.0.0.1:$$frontend_port/zh-CN/login" >/dev/null; \
 		$(MAKE) blank-typecheck; \
 		BLANK_E2E_FRONTEND_URL="http://127.0.0.1:$$frontend_port" $(MAKE) blank-e2e
+
+lint:
+	cd backend && $(RUFF) check --ignore $(RUFF_RATCHET_IGNORE) .
+	cd backend && $(RUFF) format --check .
+	cd backend && $(PYTHON) -m tools.quality_gates.runner --repo $(REPO_ROOT) --config gates.json
+
+lint-fix:
+	cd backend && $(RUFF) check --select RUF100 --fix .
+	cd backend && $(RUFF) format .

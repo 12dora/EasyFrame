@@ -17,15 +17,13 @@ packages = ["enterprise_platform", "enterprise_platform.authz", "enterprise_plat
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+extend = "ruff-gates.toml"
 
-[tool.ruff.lint]
-select = ["E", "F", "I", "N", "UP", "B"]
-
-[tool.ruff.lint.per-file-ignores]
-# FastAPI 要求 Depends()/Query() 做默认值, B008 不适用
-"enterprise_platform/*.py" = ["B008"]
-"blank_app/*.py" = ["B008"]
-# Alembic 迁移文件是生成的, 保持原有导入风格
+[tool.ruff.lint.extend-per-file-ignores]
+# FastAPI 要求 Depends()/Query() 做默认值,B008 不适用;本仓路由不在 api/ 目录下。
+"enterprise_platform/**/*.py" = ["B008"]
+"blank_app/**/*.py" = ["B008"]
+# Alembic 迁移文件是生成的,保持原有导入风格
 "blank_app/alembic/versions/*.py" = ["I001", "UP007", "UP035"]
 
 [tool.pytest.ini_options]

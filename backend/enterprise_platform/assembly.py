@@ -166,7 +166,7 @@ def create_platform_router(
     current_user_dependency: Callable[..., CurrentUser] | None = None,
     permission_dependency_factory: Callable[[str], Callable[..., Any]] | None = None,
     enforce_shared_rate_limits: bool = True,
-) -> APIRouter:  # noqa: C901, PLR0915
+) -> APIRouter:
     """创建完整企业框架 API；宿主只负责适配 ports。"""
 
     router = APIRouter()
