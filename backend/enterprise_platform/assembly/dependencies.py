@@ -34,7 +34,9 @@ def port_call(callback: Callable[[], Any]) -> Any:
         raise HTTPException(exc.status_code, exc.detail) from exc
 
 
-@dataclass(frozen=True)
+# eq=False:FastAPI 以依赖可调用对象为缓存键,生成的 __hash__ 会递归哈希 ports/adapter,
+# 宿主传入可变 adapter 时会 TypeError;按身份哈希与原闭包行为一致。
+@dataclass(frozen=True, eq=False)
 class _FixedCurrentUser:
     ports: PlatformPorts
 
@@ -61,7 +63,7 @@ def _make_gated_current_user(recovery_user: CurrentUserDep) -> CurrentUserDep:
     return current_user
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class _FixedPermission:
     ports: PlatformPorts
     code: str
