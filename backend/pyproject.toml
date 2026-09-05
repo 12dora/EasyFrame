@@ -13,7 +13,12 @@ description = "EasyFrame 共享企业平台内核(enterprise_platform)"
 requires-python = ">=3.11"
 
 [tool.setuptools]
-packages = ["enterprise_platform", "enterprise_platform.authz", "enterprise_platform.easyauth"]
+packages = [
+    "enterprise_platform",
+    "enterprise_platform.assembly",
+    "enterprise_platform.authz",
+    "enterprise_platform.easyauth",
+]
 [tool.ruff]
 target-version = "py311"
 line-length = 120
