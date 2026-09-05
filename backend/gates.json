@@ -7,7 +7,6 @@
   ],
   "baseline": "backend/.code-smells-baseline.json",
   "ruff_config": "backend/pyproject.toml",
-  "ruff_command": ["uv", "tool", "run", "ruff@0.16.2"],
   "duplicate_window": 40,
   "thresholds": {
     "production_file": 500,

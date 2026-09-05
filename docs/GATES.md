@@ -32,13 +32,31 @@ extend = "easyframe/backend/ruff-gates.toml"
 
 含义:FastAPI 路由里 `Depends()`/`Query()` 做默认值,B008 不适用,注入参数也常超过 8 个;测试是线性 arrange/act/assert,豁免语句数/参数个数(圈复杂度仍管);Alembic `upgrade()` 经常是长段 DDL,豁免 PLR0915。EasyCustoms 把测试目录改成自己的名字即可;没有 `customs_tests/` 的宿主删掉那一行。
 
-跑棘轮(体积 + 重复 + 规模类 ruff,对照宿主自己的基线):
+跑棘轮(体积 + 重复 + 规模类 ruff,对照宿主自己的基线)。**runner CLI 不变**:
 
 ```bash
 python -m tools.quality_gates.runner --repo <仓库根> --config <gates.json>
 ```
 
 runner 以宿主 ruff 配置文件所在目录为 `cwd`(可用 `--ruff-cwd` 覆盖),并传入扫描根的绝对路径,这样从仓库根还是 `backend/` 启动结果一致。把 EasyFrame 的 `backend/tools/quality_gates/` 放进 `PYTHONPATH`(镜像里与 `enterprise_platform` 一样 COPY 到原路径即可)。`gates.json` 里写扫描根、阈值表、基线路径;缺省阈值与上表相同。
+
+ruff 可执行文件由 runner 和门禁测试同一套顺序解析,镜像里不必再塞 `uv` 包装脚本:
+
+1. 环境变量 `QUALITY_GATES_RUFF`(可执行文件路径,最高优先)
+2. `PATH` 上的 `ruff`(宿主测试镜像 pip install 即可)
+3. 回退 `uv tool run ruff@0.16.2`(本仓开发机 / CI)
+
+## 宿主镜像里跑门禁测试
+
+`platform_tests/test_quality_gate_*.py` 会 `extend` 包内片段 `tools/quality_gates/ruff-gates.toml`,**不要**再假设片段在 `platform_tests` 的上一级。因此测试镜像只需 COPY EasyFrame 的 `tools/` 与 `platform_tests/`(与 blank 测试镜像相同);不必为了这些测试再 COPY `backend/ruff-gates.toml`。权威片段仍是 submodule 里的 `easyframe/backend/ruff-gates.toml`(宿主 pyproject `extend` 这一份);包内副本必须与它逐字节相同,改规则时两份一起改。
+
+```bash
+# PYTHONPATH 含 tools 的父目录;ruff 已在 PATH 上
+python -m pytest -q platform_tests/test_quality_gate_*.py
+
+# ruff 不在 PATH 时(例如未激活的 venv)
+QUALITY_GATES_RUFF=/path/to/ruff python -m pytest -q platform_tests/test_quality_gate_*.py
+```
 
 本仓:`make lint` = `ruff check`(忽略棘轮规则) + `ruff format --check` + runner + `platform_tests/test_quality_gate_*.py`;`make lint-fix` = RUF100 `--fix` + `ruff format`。
 

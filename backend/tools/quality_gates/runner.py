@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from collections import defaultdict
@@ -22,6 +24,8 @@ from tools.quality_gates.code_size import (
 )
 from tools.quality_gates.duplicates import WINDOW_SIZE, scan_duplicate_windows
 
+PINNED_RUFF_VERSION = "0.16.2"
+QUALITY_GATES_RUFF_ENV = "QUALITY_GATES_RUFF"
 RUFF_VALUE_RE = re.compile(r"\((\d+) > \d+\)")
 RUFF_SYMBOL_RE = re.compile(r"`([^`]+)`")
 SIZE_RULES = {
@@ -92,8 +96,25 @@ def collect_findings(repo_root: Path, payload: dict[str, Any]) -> Findings:
     return sort_findings(found)
 
 
+def ruff_gates_fragment() -> Path:
+    """包内 ruff 片段;只 COPY tools/ 的宿主镜像也能 extend 到同一套规则。"""
+
+    return Path(__file__).resolve().parent / "ruff-gates.toml"
+
+
+def resolve_ruff_command() -> list[str]:
+    """QUALITY_GATES_RUFF → PATH 上的 ruff → uv tool run ruff@钉死版本。"""
+
+    override = os.environ.get(QUALITY_GATES_RUFF_ENV, "").strip()
+    if override:
+        return [override]
+    if shutil.which("ruff"):
+        return ["ruff"]
+    return ["uv", "tool", "run", f"ruff@{PINNED_RUFF_VERSION}"]
+
+
 def collect_ruff(repo_root: Path, payload: dict[str, Any]) -> Findings:
-    command = list(payload.get("ruff_command") or ["uv", "tool", "run", "ruff@0.16.2"])
+    command = resolve_ruff_command()
     config = _ruff_config_path(repo_root, payload)
     ruff_cwd = _ruff_cwd(config, payload)
     roots = [str((repo_root / item).resolve()) for item in payload.get("scan_roots") or []]

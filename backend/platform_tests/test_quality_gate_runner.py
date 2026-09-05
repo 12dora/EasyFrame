@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from tools.quality_gates.runner import (
+    PINNED_RUFF_VERSION,
     _run_update,
     collect_findings,
     collect_ruff,
@@ -15,13 +16,13 @@ from tools.quality_gates.runner import (
     load_baseline,
     load_gates_config,
     main,
+    resolve_ruff_command,
+    ruff_gates_fragment,
     sort_findings,
     write_baseline,
 )
 
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-FRAGMENT = BACKEND_DIR / "ruff-gates.toml"
-RUFF = ["uv", "tool", "run", "ruff@0.16.2"]
+FRAGMENT = ruff_gates_fragment()
 DEPENDS_SOURCE = "def Depends():\n    return None\n\ndef endpoint(user=Depends()):\n    return user\n"
 
 
@@ -130,6 +131,39 @@ def test_legacy_file_baseline_migrates_with_update(tmp_path: Path) -> None:
     assert load_baseline(baseline_path) == found
 
 
+def test_ruff_gates_fragment_is_shipped_inside_the_package() -> None:
+    fragment = ruff_gates_fragment()
+    assert fragment.name == "ruff-gates.toml"
+    assert fragment.parent.name == "quality_gates"
+    assert fragment.is_file()
+
+
+def test_packaged_ruff_gates_matches_canonical_when_present() -> None:
+    packaged = ruff_gates_fragment()
+    canonical = packaged.parent.parent.parent / "ruff-gates.toml"
+    if not canonical.is_file():
+        return
+    assert packaged.read_text(encoding="utf-8") == canonical.read_text(encoding="utf-8")
+
+
+def test_resolve_ruff_command_prefers_env_over_path(monkeypatch) -> None:
+    monkeypatch.setenv("QUALITY_GATES_RUFF", "/custom/ruff")
+    monkeypatch.setattr("tools.quality_gates.runner.shutil.which", lambda _name: "/usr/bin/ruff")
+    assert resolve_ruff_command() == ["/custom/ruff"]
+
+
+def test_resolve_ruff_command_uses_path_when_env_unset(monkeypatch) -> None:
+    monkeypatch.delenv("QUALITY_GATES_RUFF", raising=False)
+    monkeypatch.setattr("tools.quality_gates.runner.shutil.which", lambda _name: "/usr/bin/ruff")
+    assert resolve_ruff_command() == ["ruff"]
+
+
+def test_resolve_ruff_command_falls_back_to_pinned_uv(monkeypatch) -> None:
+    monkeypatch.delenv("QUALITY_GATES_RUFF", raising=False)
+    monkeypatch.setattr("tools.quality_gates.runner.shutil.which", lambda _name: None)
+    assert resolve_ruff_command() == ["uv", "tool", "run", f"ruff@{PINNED_RUFF_VERSION}"]
+
+
 def test_fragment_api_depends_needs_downstream_per_file_ignore(tmp_path: Path) -> None:
     repo = tmp_path / "downstream"
     api_file = repo / "api" / "x.py"
@@ -211,7 +245,7 @@ line-length = 120
 def _ruff_json(cwd: Path, config: Path, *paths: Path) -> list[dict]:
     proc = subprocess.run(
         [
-            *RUFF,
+            *resolve_ruff_command(),
             "check",
             "--select",
             "B008",
@@ -251,7 +285,6 @@ def _host_repo_with_api_ignore(tmp_path: Path) -> Path:
         "scan_roots": ["backend/app"],
         "baseline": "backend/.code-smells-baseline.json",
         "ruff_config": "backend/pyproject.toml",
-        "ruff_command": RUFF,
         "duplicate_window": 40,
     }
     (repo / "gates.json").write_text(json.dumps(found_payload), encoding="utf-8")
