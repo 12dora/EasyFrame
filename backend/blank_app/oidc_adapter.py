@@ -1,6 +1,7 @@
 """blank host 对共享 OIDC flow 的账号投影适配。"""
 
 import os
+from datetime import UTC, datetime
 
 from blank_app.adapters import OIDC_STATE_KEY_PURPOSE, _get_setting, account_adapter, signing_key
 from blank_app.database import SessionLocal
@@ -78,3 +79,13 @@ class BlankOidcHost:
 
     def issue_session(self, account_id: str) -> str:
         return account_adapter.issue_session(account_id)
+
+    def revoke_sessions_by_subject(self, sub: str) -> int:
+        with SessionLocal() as db:
+            count = (
+                db.query(Account)
+                .filter(Account.external_source == "authentik", Account.external_user_id == sub)
+                .update({Account.sessions_revoked_at: datetime.now(UTC)}, synchronize_session=False)
+            )
+            db.commit()
+            return count

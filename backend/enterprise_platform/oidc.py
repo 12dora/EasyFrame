@@ -12,7 +12,7 @@ from typing import Any, Protocol
 from urllib.parse import quote, urlencode
 
 import httpx
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from jose import JWTError, jwt
 
@@ -119,6 +119,7 @@ class OidcHost(Protocol):
     def config(self) -> OidcConfig: ...
     def upsert_identity(self, identity: OidcIdentity) -> str: ...
     def issue_session(self, account_id: str) -> str: ...
+    def revoke_sessions_by_subject(self, sub: str) -> int: ...
 
 
 def default_locale_resolver(request: Request) -> str | None:
@@ -326,46 +327,13 @@ def fetch_userinfo(config: OidcConfig, token: str) -> dict[str, Any]:
 
 
 def create_oidc_router(host: OidcHost, *, routes: OidcRouteConfig | None = None) -> APIRouter:
+    from enterprise_platform.oidc_logout import register_backchannel_logout
+    from enterprise_platform.oidc_start import register_oidc_start
+
     route_config = routes or OidcRouteConfig()
     router = APIRouter(prefix="/auth/oidc", tags=["auth-oidc"])
 
-    @router.get("/status")
-    def status() -> dict[str, Any]:
-        try:
-            config = host.config()
-            config.validated()
-            enabled = True
-        except OidcFlowError:
-            enabled = False
-        return {
-            "enabled": enabled,
-            "authorizePath": route_config.authorize_path,
-            "endSessionUrl": f"{config.issuer.rstrip('/')}/end-session/" if enabled else None,
-        }
-
-    @router.get("/authorize")
-    def authorize(request: Request, next: str | None = Query(None, max_length=500)):
-        try:
-            config = host.config().validated()
-        except OidcFlowError as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "kind": exc.kind})
-        locale = _resolved_locale(route_config.locale_resolver(request), route_config)
-        state, nonce, challenge, cookie = issue_state(sanitize_next(next), config, locale=locale)
-        response = RedirectResponse(build_authorize_url(config, state=state, nonce=nonce, challenge=challenge), 302)
-        response.set_cookie(
-            route_config.state_cookie_name,
-            cookie,
-            max_age=STATE_TTL_SECONDS,
-            path=route_config.cookie_path,
-            httponly=True,
-            samesite="lax",
-            secure=(
-                route_config.force_secure_cookies
-                or request.url.scheme == "https"
-                or request.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower() == "https"
-            ),
-        )
-        return response
+    register_oidc_start(router, host, route_config)
 
     @router.get("/callback")
     def callback(
@@ -401,6 +369,7 @@ def create_oidc_router(host: OidcHost, *, routes: OidcRouteConfig | None = None)
         response.delete_cookie(route_config.state_cookie_name, path=route_config.cookie_path)
         return response
 
+    register_backchannel_logout(router, host)
     return router
 
 

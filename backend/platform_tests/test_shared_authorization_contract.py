@@ -310,6 +310,13 @@ def test_trusted_authority_transport_allows_private_dns_but_locks_redirect_autho
 
 
 class MinimalOidcHost:
+    def __init__(self):
+        self.revoked_subjects: list[str] = []
+
+    def revoke_sessions_by_subject(self, sub: str) -> int:
+        self.revoked_subjects.append(sub)
+        return 0
+
     def config(self):
         return OidcConfig(
             enabled=True,
