@@ -47,7 +47,7 @@ def _callback(client, state, **params):
     return client.get("/gateway/v2/auth/oidc/callback", params={"state": state, **params}, follow_redirects=False)
 
 
-def _assert_silent(response, expected, locale="en"):
+def _assert_silent(response, expected, locale="en", *, cleared=True):
     assert response.status_code == 302
     location = urlsplit(response.headers["location"])
     assert location.scheme == "https" and location.netloc == "app.example"
@@ -55,8 +55,12 @@ def _assert_silent(response, expected, locale="en"):
     assert location.query == ""
     assert parse_qs(location.fragment) == {key: [value] for key, value in expected.items()}
     assert response.headers["cache-control"] == "no-store"
-    assert "Max-Age=0" in response.headers["set-cookie"]
-    assert "Path=/gateway/v2/auth/oidc" in response.headers["set-cookie"]
+    if cleared:
+        assert "Max-Age=0" in response.headers["set-cookie"]
+        assert "_silent=" in response.headers["set-cookie"]
+        assert "Path=/gateway/v2/auth/oidc" in response.headers["set-cookie"]
+    else:
+        assert "set-cookie" not in response.headers
 
 
 def test_silent_authorize_sets_signed_claim_and_prompt(silent_client):
@@ -66,7 +70,7 @@ def test_silent_authorize_sets_signed_claim_and_prompt(silent_client):
     params = _authorize(client)
     assert params["prompt"] == "none"
     assert params["code_challenge_method"] == "S256"
-    claims = oidc.verify_state(client.cookies.get(routes.state_cookie_name), params["state"], host.config())
+    claims = oidc.verify_state(client.cookies.get(f"{routes.state_cookie_name}_silent"), params["state"], host.config())
     assert claims["silent"] is True
     assert claims["locale"] == "en"
     ordinary = _authorize(client, "locale=en")
@@ -75,7 +79,7 @@ def test_silent_authorize_sets_signed_claim_and_prompt(silent_client):
     assert claims["silent"] is False
 
 
-@pytest.mark.parametrize("error", ["login_required", "interaction_required", "consent_required", "access_denied"])
+@pytest.mark.parametrize("error", ["login_required", "access_denied"])
 def test_silent_provider_logged_out(silent_client, error):
     client, _, _ = silent_client
     state = _authorize(client)["state"]
@@ -84,7 +88,15 @@ def test_silent_provider_logged_out(silent_client, error):
     assert "provider-secret" not in response.headers["location"]
 
 
-@pytest.mark.parametrize("error,kind", [("server_error", "server_error"), ("unknown", "provider_error")])
+@pytest.mark.parametrize(
+    "error,kind",
+    [
+        ("interaction_required", "interaction_required"),
+        ("consent_required", "consent_required"),
+        ("server_error", "server_error"),
+        ("unknown", "provider_error"),
+    ],
+)
 def test_silent_provider_failure_is_error(silent_client, error, kind):
     client, _, _ = silent_client
     state = _authorize(client)["state"]
@@ -132,7 +144,7 @@ def test_silent_flow_errors_clear_cookie(silent_client, monkeypatch, stage, kind
     response = _callback(
         client, "wrong-state" if stage == "state" else state, **({} if stage == "code" else {"code": "code"})
     )
-    _assert_silent(response, {"outcome": "error", "kind": kind})
+    _assert_silent(response, {"outcome": "error", "kind": kind}, cleared=stage != "state")
 
 
 def test_untrusted_silent_claim_cannot_choose_callback_page(silent_client):
@@ -140,11 +152,11 @@ def test_untrusted_silent_claim_cannot_choose_callback_page(silent_client):
     params = _authorize(client)
     forged = jwt.encode({"silent": True, "state": params["state"]}, "attacker-key", algorithm="HS256")
     client.cookies.clear()
-    client.cookies.set(routes.state_cookie_name, forged)
+    client.cookies.set(f"{routes.state_cookie_name}_silent", forged)
     response = _callback(client, params["state"], error="login_required")
     assert urlsplit(response.headers["location"]).path == "/zh-CN/login"
     assert "state_mismatch" in response.headers["location"]
-    assert "Max-Age=0" in response.headers["set-cookie"]
+    assert "set-cookie" not in response.headers
 
 
 def test_ordinary_success_contract_and_unconfigured_cookie_cleanup(silent_client):
@@ -165,9 +177,45 @@ def test_ordinary_success_contract_and_unconfigured_cookie_cleanup(silent_client
 def test_expired_signed_silent_state_returns_error_without_issuing_session(silent_client):
     client, host, routes = silent_client
     state = _authorize(client)["state"]
-    claims = oidc.verify_state(client.cookies.get(routes.state_cookie_name), state, host.config())
+    claims = oidc.verify_state(client.cookies.get(f"{routes.state_cookie_name}_silent"), state, host.config())
     claims["exp"] = 1
     cookie = jwt.encode(claims, host.config().signing_secret, algorithm="HS256")
     client.cookies.clear()
-    client.cookies.set(routes.state_cookie_name, cookie)
+    client.cookies.set(f"{routes.state_cookie_name}_silent", cookie)
     _assert_silent(_callback(client, state, code="code"), {"outcome": "error", "kind": "state_mismatch"})
+
+
+@pytest.mark.parametrize("silent_first", [False, True])
+def test_interactive_login_survives_concurrent_silent_authorize(silent_client, silent_first):
+    client, _, routes = silent_client
+    interactive = _authorize(client, "next=/en/settings")["state"]
+    interactive_cookie = client.cookies.get(routes.state_cookie_name)
+    silent = _authorize(client)["state"]
+    assert client.cookies.get(routes.state_cookie_name) == interactive_cookie
+    if silent_first:
+        _assert_silent(
+            _callback(client, silent, error="login_required"), {"outcome": "logged_out", "kind": "login_required"}
+        )
+        assert client.cookies.get(routes.state_cookie_name) == interactive_cookie
+    response = _callback(client, interactive, code="code")
+    location = urlsplit(response.headers["location"])
+    assert location.path == "/en/login/oidc-complete"
+    assert parse_qs(location.fragment) == {"token": ["jwt-for-local-alice"], "next": ["/en/settings"]}
+    assert client.cookies.get(routes.state_cookie_name) is None
+    if not silent_first:
+        assert client.cookies.get(f"{routes.state_cookie_name}_silent") is not None
+        _assert_silent(
+            _callback(client, silent, error="login_required"), {"outcome": "logged_out", "kind": "login_required"}
+        )
+
+
+def test_unmatched_silent_callback_preserves_interactive_login(silent_client):
+    client, _, routes = silent_client
+    interactive = _authorize(client, "locale=en")["state"]
+    cookie = client.cookies.get(routes.state_cookie_name)
+    stale = _authorize(client)["state"]
+    _authorize(client)
+    response = _callback(client, stale, error="login_required")
+    _assert_silent(response, {"outcome": "error", "kind": "state_mismatch"}, cleared=False)
+    assert client.cookies.get(routes.state_cookie_name) == cookie
+    assert urlsplit(_callback(client, interactive, code="code").headers["location"]).path == "/en/login/oidc-complete"

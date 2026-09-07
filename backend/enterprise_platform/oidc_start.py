@@ -45,7 +45,7 @@ def register_oidc_start(router: APIRouter, host: OidcHost, route_config: OidcRou
             build_authorize_url(config, state=state, nonce=nonce, challenge=challenge, silent=silent), 302
         )
         response.set_cookie(
-            route_config.state_cookie_name,
+            f"{route_config.state_cookie_name}_silent" if silent else route_config.state_cookie_name,
             cookie,
             max_age=STATE_TTL_SECONDS,
             path=route_config.cookie_path,

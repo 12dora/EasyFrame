@@ -365,7 +365,6 @@ def _error_redirect(
         query += f"&oidc_error_detail={quote(detail[:300])}"
     login_path = _localized_path(routes.frontend_login_path, locale)
     response = RedirectResponse(f"{config.frontend_base_url}{login_path}?{query}", 302)
-    response.delete_cookie(routes.state_cookie_name, path=routes.cookie_path)
     return response
 
 

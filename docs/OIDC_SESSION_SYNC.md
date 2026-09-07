@@ -49,7 +49,7 @@ OIDC 未启用返回 404，配置不完整返回 409，JSON 含 `detail` / `kind
 `GET /api/v1/auth/oidc/status` 新增 `silentAuthorizePath`，其值为 `authorizePath + "?silent=1"`。
 宿主应读取返回路径，不硬编码 API 前缀。静默入口沿用授权码、PKCE、state、nonce 校验，
 在签名状态 cookie 中记录 `silent: true`，向 Authentik 的授权请求追加 `prompt=none`。
-`locale`、`next` 和状态 cookie 的路径、安全属性遵循普通登录规则。
+静默状态使用独立的 `<state_cookie_name>_silent` cookie；`locale`、`next`、cookie 路径、安全属性和 TTL 遵循普通登录规则。
 
 宿主前端必须新增公开页面 `/login/oidc-silent`，按现有语言路由挂载，例如
 `/zh-CN/login/oidc-silent` 和 `/en/login/oidc-silent`。可通过
@@ -59,13 +59,14 @@ OIDC 未启用返回 404，配置不完整返回 409，JSON 含 `detail` / `kind
 | 条件 | 完成片段 |
 |---|---|
 | 上游当前账号登录成功 | `#outcome=authenticated&token=<本地会话JWT>&account=<本地账号ID>` |
-| `login_required`、`interaction_required`、`consent_required`、`access_denied` | `#outcome=logged_out&kind=<上述错误>` |
-| 其他 provider 错误、授权码交换失败、ID token 无效、账号停用等 | `#outcome=error&kind=<错误种类>` |
+| `login_required`（无上游会话）、`access_denied`（上游策略拒绝应用） | `#outcome=logged_out&kind=<上述错误>` |
+| `interaction_required`、`consent_required`（上游已登录但需要交互，保留本地会话）、其他 provider 错误、授权码交换失败、ID token 无效、账号停用等 | `#outcome=error&kind=<错误种类>` |
 
 所有片段值均经过 URL 编码。不要把 `error_description` 当成前端错误类型；框架不向静默页面透传它。
-回调始终删除状态 cookie。有效签名的过期 cookie 仅用于选择静默错误页，不能通过有效期校验完成登录。
+回调优先选择验签后标记为静默且 state 匹配的 cookie，否则检查交互 cookie；仅删除匹配事务的 cookie。
+两者均不匹配时，有可信静默 cookie 则返回 `outcome=error`，保留未完成事务的 cookie。有效签名的过期 cookie 仅用于选择静默错误页，不能通过有效期校验完成登录。
 缺失、签名错误或用途错误的 cookie 无法证明是静默流程，会走普通登录错误页，父页面按超时处理。
-OIDC 未配置时回调返回 404/409 JSON，并清除 cookie。普通登录继续使用原来的完成页和 `next` 片段。
+OIDC 未配置时回调返回 404/409 JSON，并仅清除匹配事务的 cookie。普通登录继续使用原来的完成页和 `next` 片段。
 
 静默页面读取 fragment 后，使用 `window.parent.postMessage(payload, window.location.origin)`
 通知父窗口；消息结构由宿主前端统一定义。页面不得把 token 写入日志或分析服务。
@@ -82,7 +83,8 @@ OIDC 未配置时回调返回 404/409 JSON，并清除 cookie。普通登录继�
 只对经 Authentik 建立的会话运行检查，本地密码或本地管理员会话跳过。
 触发时机为 SPA 启动、页面重新可见（最多每 60 秒一次）、页面可见期间每 5 分钟一次，
 以及 API 返回 401 时（在弹出会话过期提示前检查）。同一时刻只能有一次检查；
-避免静默流程与普通交互登录并发覆盖同一个状态 cookie。401 检查中若身份变化则刷新，
+静默流程与普通交互登录使用独立 cookie，可并发进行。多个标签页的静默检查仍可能互相覆盖，
+此时返回 `error`，下次定时检查重试。401 检查中若身份变化则刷新，
 若已退出则跳登录，其余情况交还既有 UI。
 
 ## 页面与网关响应头

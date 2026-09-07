@@ -1,5 +1,6 @@
 """普通登录与静默身份复检的回调结果。"""
 
+import secrets
 from typing import Any
 from urllib.parse import urlencode
 
@@ -8,14 +9,15 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from enterprise_platform import oidc
 
-_LOGGED_OUT_ERRORS = frozenset({"login_required", "interaction_required", "consent_required", "access_denied"})
+_LOGGED_OUT_ERRORS = frozenset({"login_required", "access_denied"})
 
 
 class _Callback:
     def __init__(self, host: oidc.OidcHost, routes: oidc.OidcRouteConfig):
         self.host = host
         self.routes = routes
-        self.config = host.config().validated()
+        self.config = host.config()
+        self.cookie_name: str | None = None
         self.locale = routes.default_locale
         self.claims: dict[str, Any] = {}
 
@@ -49,11 +51,31 @@ class _Callback:
             return self.redirect({"outcome": "authenticated", "token": token, "account": account})
         return self.redirect({"token": token, "next": str(self.claims.get("next") or "")})
 
+    def select_cookie(self, request: Request, state: str | None) -> str | None:
+        silent_cookie = None
+        silent_claims: dict[str, Any] = {}
+        for name in (f"{self.routes.state_cookie_name}_silent", self.routes.state_cookie_name):
+            cookie = request.cookies.get(name)
+            try:
+                claims = oidc._state_cookie_claims(cookie, self.config, verify_exp=False)
+            except oidc.OidcFlowError:
+                continue
+            if name == f"{self.routes.state_cookie_name}_silent":
+                if claims.get("silent") is not True:
+                    continue
+                silent_cookie, silent_claims = cookie, claims
+            if state and secrets.compare_digest(str(claims.get("state")), state):
+                self.cookie_name, self.claims = name, claims
+                return cookie
+        # 多标签页静默检查仍可能互相覆盖；未匹配时返回 error，下一次定时检查重试。
+        # 仅用验签后的静默声明选择错误页，不删除任何未匹配事务的 cookie。
+        self.claims = silent_claims
+        return silent_cookie
+
     def run(self, request: Request, code: str | None, state: str | None, error: str | None) -> RedirectResponse:
-        cookie = request.cookies.get(self.routes.state_cookie_name)
+        cookie = self.select_cookie(request, state)
+        self.config.validated()
         try:
-            # 先验签选择结果页，再完整校验有效期和 state；过期 cookie 仅用于路由错误。
-            self.claims = oidc._state_cookie_claims(cookie, self.config, verify_exp=False)
             self.locale = oidc._locale_from_claims(self.claims, self.routes)
             oidc.verify_state(cookie, state, self.config)
             if error:
@@ -72,9 +94,12 @@ def register_oidc_callback(router: APIRouter, host: oidc.OidcHost, routes: oidc.
         error: str | None = None,
         error_description: str | None = None,
     ):
+        flow = None
         try:
-            response = _Callback(host, routes).run(request, code, state, error)
+            flow = _Callback(host, routes)
+            response = flow.run(request, code, state, error)
         except oidc.OidcFlowError as exc:
             response = JSONResponse({"detail": exc.detail, "kind": exc.kind}, exc.status_code)
-        response.delete_cookie(routes.state_cookie_name, path=routes.cookie_path)
+        if flow is not None and flow.cookie_name is not None:
+            response.delete_cookie(flow.cookie_name, path=routes.cookie_path)
         return response
