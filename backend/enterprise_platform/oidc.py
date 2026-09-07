@@ -13,7 +13,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from jose import JWTError, jwt
 
 from enterprise_platform.jwks import valid_jwks
@@ -135,6 +135,7 @@ class OidcRouteConfig:
     api_base_path: str = "/api/v1"
     frontend_complete_path: str = "/login/oidc-complete"
     frontend_login_path: str = "/login"
+    frontend_silent_path: str = "/login/oidc-silent"
     supported_locales: tuple[str, ...] = ("zh-CN", "en")
     default_locale: str = "zh-CN"
     force_secure_cookies: bool = False
@@ -162,7 +163,9 @@ def sanitize_next(next_path: str | None) -> str | None:
     return next_path
 
 
-def issue_state(next_path: str | None, config: OidcConfig, *, locale: str | None = None) -> tuple[str, str, str, str]:
+def issue_state(
+    next_path: str | None, config: OidcConfig, *, locale: str | None = None, silent: bool = False
+) -> tuple[str, str, str, str]:
     state, nonce, verifier = secrets.token_urlsafe(24), secrets.token_urlsafe(24), secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     now = int(time.time())
@@ -174,6 +177,7 @@ def issue_state(next_path: str | None, config: OidcConfig, *, locale: str | None
             "verifier": verifier,
             "next": sanitize_next(next_path) or "",
             "locale": locale or "",
+            "silent": silent,
             "iat": now,
             "exp": now + STATE_TTL_SECONDS,
         },
@@ -183,19 +187,26 @@ def issue_state(next_path: str | None, config: OidcConfig, *, locale: str | None
     return state, nonce, challenge, cookie
 
 
-def verify_state(cookie: str | None, state: str | None, config: OidcConfig) -> dict[str, Any]:
-    if not cookie or not state:
+def _state_cookie_claims(cookie: str | None, config: OidcConfig, *, verify_exp: bool = True) -> dict[str, Any]:
+    if not cookie:
         raise OidcFlowError("登录状态缺失或已过期,请重新登录", kind="state_mismatch")
     try:
-        claims = jwt.decode(cookie, config.signing_secret, algorithms=["HS256"])
+        claims = jwt.decode(cookie, config.signing_secret, algorithms=["HS256"], options={"verify_exp": verify_exp})
     except JWTError as exc:
         raise OidcFlowError("登录状态无效或已过期,请重新登录", kind="state_mismatch") from exc
-    if claims.get("purpose") != STATE_PURPOSE or not secrets.compare_digest(str(claims.get("state")), state):
+    if claims.get("purpose") != STATE_PURPOSE:
         raise OidcFlowError("登录状态不匹配,请重新登录", kind="state_mismatch")
     return claims
 
 
-def build_authorize_url(config: OidcConfig, *, state: str, nonce: str, challenge: str) -> str:
+def verify_state(cookie: str | None, state: str | None, config: OidcConfig) -> dict[str, Any]:
+    claims = _state_cookie_claims(cookie, config)
+    if not state or not secrets.compare_digest(str(claims.get("state")), state):
+        raise OidcFlowError("登录状态不匹配,请重新登录", kind="state_mismatch")
+    return claims
+
+
+def build_authorize_url(config: OidcConfig, *, state: str, nonce: str, challenge: str, silent: bool = False) -> str:
     query = urlencode(
         {
             "response_type": "code",
@@ -206,6 +217,7 @@ def build_authorize_url(config: OidcConfig, *, state: str, nonce: str, challenge
             "nonce": nonce,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
+            **({"prompt": "none"} if silent else {}),
         }
     )
     return f"{config.authorization_endpoint}{'&' if '?' in config.authorization_endpoint else '?'}{query}"
@@ -327,6 +339,7 @@ def fetch_userinfo(config: OidcConfig, token: str) -> dict[str, Any]:
 
 
 def create_oidc_router(host: OidcHost, *, routes: OidcRouteConfig | None = None) -> APIRouter:
+    from enterprise_platform.oidc_callback import register_oidc_callback
     from enterprise_platform.oidc_logout import register_backchannel_logout
     from enterprise_platform.oidc_start import register_oidc_start
 
@@ -335,40 +348,7 @@ def create_oidc_router(host: OidcHost, *, routes: OidcRouteConfig | None = None)
 
     register_oidc_start(router, host, route_config)
 
-    @router.get("/callback")
-    def callback(
-        request: Request,
-        code: str | None = None,
-        state: str | None = None,
-        error: str | None = None,
-        error_description: str | None = None,
-    ):
-        try:
-            config = host.config().validated()
-        except OidcFlowError as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "kind": exc.kind})
-        locale = route_config.default_locale
-        try:
-            state_claims = verify_state(request.cookies.get(route_config.state_cookie_name), state, config)
-            locale = _locale_from_claims(state_claims, route_config)
-            if error:
-                return _error_redirect(config, _provider_error_kind(error), None, route_config, locale)
-            if not code:
-                raise OidcFlowError("回调缺少授权码", kind="missing_code")
-            tokens = exchange_code(config, code, str(state_claims.get("verifier") or ""))
-            claims = validate_id_token(config, str(tokens["id_token"]), str(state_claims.get("nonce") or ""))
-            if not claims.get("picture"):
-                claims = {**fetch_userinfo(config, str(tokens.get("access_token") or "")), **claims}
-            account_id = host.upsert_identity(OidcIdentity.from_claims(claims))
-        except OidcFlowError as exc:
-            detail = None if exc.kind == "state_mismatch" else exc.detail
-            return _error_redirect(config, exc.kind, detail, route_config, locale)
-        fragment = urlencode({"token": host.issue_session(account_id), "next": str(state_claims.get("next") or "")})
-        complete_path = _localized_path(route_config.frontend_complete_path, locale)
-        response = RedirectResponse(f"{config.frontend_base_url}{complete_path}#{fragment}", 302)
-        response.delete_cookie(route_config.state_cookie_name, path=route_config.cookie_path)
-        return response
-
+    register_oidc_callback(router, host, route_config)
     register_backchannel_logout(router, host)
     return router
 

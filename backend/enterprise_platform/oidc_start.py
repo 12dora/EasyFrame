@@ -29,18 +29,21 @@ def register_oidc_start(router: APIRouter, host: OidcHost, route_config: OidcRou
         return {
             "enabled": enabled,
             "authorizePath": route_config.authorize_path,
+            "silentAuthorizePath": route_config.authorize_path + "?silent=1",
             "endSessionUrl": f"{config.issuer.rstrip('/')}/end-session/" if enabled else None,
         }
 
     @router.get("/authorize")
-    def authorize(request: Request, next: str | None = Query(None, max_length=500)):
+    def authorize(request: Request, next: str | None = Query(None, max_length=500), silent: bool = False):
         try:
             config = host.config().validated()
         except OidcFlowError as exc:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "kind": exc.kind})
         locale = _resolved_locale(route_config.locale_resolver(request), route_config)
-        state, nonce, challenge, cookie = issue_state(sanitize_next(next), config, locale=locale)
-        response = RedirectResponse(build_authorize_url(config, state=state, nonce=nonce, challenge=challenge), 302)
+        state, nonce, challenge, cookie = issue_state(sanitize_next(next), config, locale=locale, silent=silent)
+        response = RedirectResponse(
+            build_authorize_url(config, state=state, nonce=nonce, challenge=challenge, silent=silent), 302
+        )
         response.set_cookie(
             route_config.state_cookie_name,
             cookie,
