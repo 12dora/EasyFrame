@@ -2,6 +2,7 @@
 
 物理实现:
 - ``authz_snapshot``: catalog 种子、权限客户端、快照持久化
+- ``authz_catalog_floor``: 目录最低版本（authority 作用域、GREATEST 抬升、与写入同事务加锁）
 - ``authz_descriptor``: well-known descriptor、manifest、同步密钥
 """
 

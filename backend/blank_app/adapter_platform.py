@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from blank_app.authz_catalog_floor import reset_catalog_floor
 from blank_app.models import Notification
 from enterprise_platform.schemas import (
     AuthorizationSettings,
@@ -297,6 +298,9 @@ class BlankIntegrationAdapter:
             "credential": _facade().encrypt_secret(credential),
             "webhook_secret": _facade().encrypt_secret(webhook_secret),
         }
+        old_authority = str(old.get("base_url") or "").rstrip("/")
+        if old_authority and old_authority != data["base_url"]:
+            reset_catalog_floor()
         _facade()._save_setting("easyauth", data, actor_id=actor_id, action="authz.settings.update")
         return _facade().EasyAuthStatus.model_validate(data)
 

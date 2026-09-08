@@ -8,8 +8,10 @@ import uuid
 from datetime import datetime, timedelta
 
 from pydantic import Field
-from sqlalchemy import tuple_
+from sqlalchemy import and_, tuple_
 
+from blank_app.authz_catalog_floor import CATALOG_FLOOR_SETTING_KEY as CATALOG_FLOOR_SETTING_KEY
+from blank_app.authz_catalog_floor import catalog_floor, lock_catalog_floor, raise_catalog_floor
 from blank_app.models import PermissionSnapshot
 from enterprise_platform.authz import (
     CatalogPermission,
@@ -21,7 +23,6 @@ from enterprise_platform.schemas import PlatformModel
 
 logger = logging.getLogger(__name__)
 
-CATALOG_FLOOR_SETTING_KEY = "easyauth_catalog_floor"
 SNAPSHOT_PULL_BACKOFF = timedelta(seconds=30)
 _PULL_LOCK_COUNT = 64
 _PULL_LOCKS = tuple(threading.Lock() for _ in range(_PULL_LOCK_COUNT))
@@ -179,7 +180,8 @@ def _load_snapshot_cache(account_id: uuid.UUID) -> tuple[bool, bool, str] | None
         pull_key = f"{app_key}:{account.external_user_id}"
         if cached is None:
             return False, False, pull_key
-        return True, _facade()._utc(cached.expires_at) > now, pull_key
+        fresh = _facade()._utc(cached.expires_at) > now and cached.catalog_version >= catalog_floor(db, app_key)
+        return True, fresh, pull_key
 
 
 def _lock_for(pull_key: str) -> threading.Lock:
@@ -300,7 +302,57 @@ def _commit_snapshot_row(
 ) -> PermissionSnapshot:
     """原子提交 snapshot；较旧 (grant_version, catalog_version) 不能覆盖较新结果。"""
 
-    _reject_below_catalog_floor(db, app_key, values["catalog_version"])
+    floor = _guard_snapshot_write(
+        db,
+        external_source=external_source,
+        external_user_id=external_user_id,
+        app_key=app_key,
+        catalog_version=values["catalog_version"],
+    )
+    db.execute(
+        _snapshot_upsert_statement(
+            row,
+            external_source=external_source,
+            external_user_id=external_user_id,
+            app_key=app_key,
+            values=values,
+            floor=floor,
+        )
+    )
+    db.commit()
+    return (
+        db.query(_facade().PermissionSnapshot)
+        .filter(
+            _facade().PermissionSnapshot.external_source == external_source,
+            _facade().PermissionSnapshot.external_user_id == external_user_id,
+            _facade().PermissionSnapshot.app_key == app_key,
+        )
+        .one()
+    )
+
+
+def _guard_snapshot_write(
+    db, *, external_source: str, external_user_id: str, app_key: str, catalog_version: int
+) -> int:
+    """先锁下限再锁快照行，锁后再核验，避免 catalog.changed 与写入交叉。"""
+
+    lock_catalog_floor(db, app_key)
+    (
+        db.query(_facade().PermissionSnapshot)
+        .filter(
+            _facade().PermissionSnapshot.external_source == external_source,
+            _facade().PermissionSnapshot.external_user_id == external_user_id,
+            _facade().PermissionSnapshot.app_key == app_key,
+        )
+        .with_for_update()
+        .one_or_none()
+    )
+    return _reject_below_catalog_floor(db, app_key, catalog_version)
+
+
+def _snapshot_upsert_statement(
+    row, *, external_source: str, external_user_id: str, app_key: str, values: dict, floor: int
+):
     insert_values = {
         "id": row.id or _facade().uuid.uuid4(),
         "external_source": external_source,
@@ -322,33 +374,26 @@ def _commit_snapshot_row(
             "expires_at",
         )
     }
-    statement = statement.on_conflict_do_update(
+    return statement.on_conflict_do_update(
         constraint="uq_platform_permission_snapshot",
         set_=update_fields,
-        where=_newer_or_equal_snapshot(statement),
-    )
-    db.execute(statement)
-    db.commit()
-    return (
-        db.query(_facade().PermissionSnapshot)
-        .filter(
-            _facade().PermissionSnapshot.external_source == external_source,
-            _facade().PermissionSnapshot.external_user_id == external_user_id,
-            _facade().PermissionSnapshot.app_key == app_key,
-        )
-        .one()
+        where=_newer_or_equal_snapshot(statement, floor),
     )
 
 
-def _newer_or_equal_snapshot(statement):
+def _newer_or_equal_snapshot(statement, floor: int):
     """目录-only 变更也会落库;较旧 (grant_version, catalog_version) 不能覆盖。"""
 
-    return tuple_(
-        statement.excluded.grant_version,
-        statement.excluded.catalog_version,
-    ) >= tuple_(
-        _facade().PermissionSnapshot.grant_version,
-        _facade().PermissionSnapshot.catalog_version,
+    return and_(
+        tuple_(
+            statement.excluded.grant_version,
+            statement.excluded.catalog_version,
+        )
+        >= tuple_(
+            _facade().PermissionSnapshot.grant_version,
+            _facade().PermissionSnapshot.catalog_version,
+        ),
+        statement.excluded.catalog_version >= floor,
     )
 
 
@@ -370,7 +415,9 @@ def snapshot_grants_for_account(account) -> tuple[NormalizedGrant, ...]:
             )
             .one_or_none()
         )
-        if snapshot is None or _facade()._utc(snapshot.expires_at) <= _facade().datetime.now(_facade().UTC):
+        floor = catalog_floor(db, app_key)
+        expired = snapshot is None or _facade()._utc(snapshot.expires_at) <= _facade().datetime.now(_facade().UTC)
+        if snapshot is None or expired or snapshot.catalog_version < floor:
             return ()
         return tuple(
             NormalizedGrant(code=grant.code, scope=grant.scope)
@@ -400,8 +447,21 @@ def refresh_snapshot_for_external_user(external_user_id: str, expected_snapshot_
     """webhook grant.changed:已持有 expected 版本则幂等成功,否则强制拉取。"""
 
     account, stored_version = _external_snapshot_state(external_user_id)
-    if account is None:
+    if account is None or stored_version == expected_snapshot_version:
         return
+    with _lock_for(_pull_key_for(account)):
+        _refresh_grant_after_flight(account, external_user_id, expected_snapshot_version)
+
+
+def _pull_key_for(account) -> str:
+    data = _facade()._get_setting("easyauth")
+    return f"{str(data.get('app_key') or '')}:{account.external_user_id}"
+
+
+def _refresh_grant_after_flight(account, external_user_id: str, expected_snapshot_version: str) -> None:
+    """等待在飞拉取后核验版本;未满足期望则再拉,不沿用事件前的在飞结果。"""
+
+    _, stored_version = _external_snapshot_state(external_user_id)
     if stored_version == expected_snapshot_version:
         return
     try:
@@ -418,7 +478,7 @@ def invalidate_app_snapshots(app_key: str, catalog_version: int) -> None:
 
     now = _facade().datetime.now(_facade().UTC)
     with _facade().SessionLocal() as db:
-        if not _raise_catalog_floor(db, app_key, catalog_version):
+        if not raise_catalog_floor(db, app_key, catalog_version):
             return
         db.query(_facade().PermissionSnapshot).filter(_facade().PermissionSnapshot.app_key == app_key).update(
             {_facade().PermissionSnapshot.expires_at: now},
@@ -427,32 +487,11 @@ def invalidate_app_snapshots(app_key: str, catalog_version: int) -> None:
         db.commit()
 
 
-def _catalog_floor(db, app_key: str) -> int:
-    setting = db.get(_facade().PlatformSetting, CATALOG_FLOOR_SETTING_KEY)
-    raw = (setting.value or {}).get(app_key, 0) if setting else 0
-    return raw if isinstance(raw, int) and raw > 0 else 0
-
-
-def _raise_catalog_floor(db, app_key: str, catalog_version: int) -> bool:
-    """已记录的最低版本 >= 宣布版本时返回 False(不改库);否则写入并返回 True。"""
-
-    setting = db.get(_facade().PlatformSetting, CATALOG_FLOOR_SETTING_KEY)
-    floors = dict(setting.value) if setting and setting.value else {}
-    current = floors.get(app_key, 0)
-    current = current if isinstance(current, int) else 0
-    if current >= catalog_version:
-        return False
-    floors[app_key] = catalog_version
-    if setting is None:
-        db.add(_facade().PlatformSetting(key=CATALOG_FLOOR_SETTING_KEY, value=floors))
-    else:
-        setting.value = floors
-    return True
-
-
-def _reject_below_catalog_floor(db, app_key: str, catalog_version: int) -> None:
-    if catalog_version < _catalog_floor(db, app_key):
+def _reject_below_catalog_floor(db, app_key: str, catalog_version: int) -> int:
+    floor = catalog_floor(db, app_key)
+    if catalog_version < floor:
         raise _facade().HTTPException(409, "snapshot catalog_version is below announced minimum")
+    return floor
 
 
 def _external_snapshot_state(external_user_id: str):
