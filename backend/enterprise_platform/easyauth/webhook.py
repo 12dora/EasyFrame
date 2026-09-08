@@ -15,6 +15,8 @@ TIMESTAMP_HEADER = "X-EasyAuth-Timestamp"
 DELIVERY_HEADER = "X-EasyAuth-Delivery"
 EVENT_HEADER = "X-EasyAuth-Event"
 TIMESTAMP_WINDOW_SECONDS = 300
+MAX_TIMESTAMP_DIGITS = 10
+SIGNATURE_HEX_LENGTH = 64
 
 GRANT_CHANGED_EVENT = "grant.changed"
 CATALOG_CHANGED_EVENT = "catalog.changed"
@@ -90,23 +92,42 @@ def _required_headers(headers: Mapping[str, str]) -> _RequiredHeaders:
 
 
 def _validate_timestamp(timestamp_raw: str, *, now: datetime) -> int:
-    if not timestamp_raw.isdecimal():
+    if not _unix_timestamp_text(timestamp_raw):
         raise WebhookVerificationError("webhook 时间戳无效。", reason=REASON_INVALID_TIMESTAMP)
-    timestamp = int(timestamp_raw)
+    try:
+        timestamp = int(timestamp_raw)
+    except ValueError as exc:
+        raise WebhookVerificationError("webhook 时间戳无效。", reason=REASON_INVALID_TIMESTAMP) from exc
     current = int(now.timestamp())
     if abs(current - timestamp) > TIMESTAMP_WINDOW_SECONDS:
         raise WebhookVerificationError("webhook 时间戳超出允许窗口。", reason=REASON_TIMESTAMP_SKEW)
     return timestamp
 
 
+def _unix_timestamp_text(timestamp_raw: str) -> bool:
+    return timestamp_raw.isascii() and timestamp_raw.isdecimal() and len(timestamp_raw) <= MAX_TIMESTAMP_DIGITS
+
+
 def _validate_signature(secret: str, *, timestamp_raw: str, signature: str, raw_body: bytes) -> None:
+    if not _ascii_hex(signature, SIGNATURE_HEX_LENGTH):
+        raise WebhookVerificationError("webhook 签名不匹配。", reason=REASON_SIGNATURE_MISMATCH)
     expected = hmac.new(
         secret.encode("utf-8"),
         timestamp_raw.encode("utf-8") + b"." + raw_body,
         hashlib.sha256,
     ).hexdigest()
-    if not hmac.compare_digest(expected, signature):
+    try:
+        matched = hmac.compare_digest(expected, signature.lower())
+    except (TypeError, ValueError) as exc:
+        raise WebhookVerificationError("webhook 签名不匹配。", reason=REASON_SIGNATURE_MISMATCH) from exc
+    if not matched:
         raise WebhookVerificationError("webhook 签名不匹配。", reason=REASON_SIGNATURE_MISMATCH)
+
+
+def _ascii_hex(value: str, length: int) -> bool:
+    if len(value) != length or not value.isascii():
+        return False
+    return all(char in "0123456789abcdefABCDEF" for char in value)
 
 
 def _parse_payload(raw_body: bytes) -> dict[str, Any]:

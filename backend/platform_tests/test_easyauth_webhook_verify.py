@@ -127,6 +127,47 @@ def test_verify_webhook_rejects_non_object_payload() -> None:
     assert captured.value.reason == REASON_INVALID_PAYLOAD
 
 
+def test_verify_webhook_rejects_huge_timestamp() -> None:
+    body = _body()
+    headers = _sign(body)
+    headers["X-EasyAuth-Timestamp"] = "9" * 32
+    headers["X-EasyAuth-Signature"] = hmac.new(
+        SECRET.encode(),
+        headers["X-EasyAuth-Timestamp"].encode() + b"." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    with pytest.raises(WebhookVerificationError) as captured:
+        verify_webhook(headers, body, SECRET, NOW)
+    assert captured.value.reason == REASON_INVALID_TIMESTAMP
+
+
+def test_verify_webhook_rejects_unicode_decimal_timestamp() -> None:
+    body = _body()
+    headers = _sign(body)
+    headers["X-EasyAuth-Timestamp"] = "١" * 10
+    with pytest.raises(WebhookVerificationError) as captured:
+        verify_webhook(headers, body, SECRET, NOW)
+    assert captured.value.reason == REASON_INVALID_TIMESTAMP
+
+
+def test_verify_webhook_rejects_non_ascii_signature() -> None:
+    body = _body()
+    headers = _sign(body)
+    headers["X-EasyAuth-Signature"] = "ß" * 64
+    with pytest.raises(WebhookVerificationError) as captured:
+        verify_webhook(headers, body, SECRET, NOW)
+    assert captured.value.reason == REASON_SIGNATURE_MISMATCH
+
+
+def test_verify_webhook_rejects_short_signature() -> None:
+    body = _body()
+    headers = _sign(body)
+    headers["X-EasyAuth-Signature"] = "ab"
+    with pytest.raises(WebhookVerificationError) as captured:
+        verify_webhook(headers, body, SECRET, NOW)
+    assert captured.value.reason == REASON_SIGNATURE_MISMATCH
+
+
 def test_verify_webhook_rejects_invalid_json() -> None:
     body = b"{not-json"
     with pytest.raises(WebhookVerificationError) as captured:
