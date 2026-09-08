@@ -271,7 +271,7 @@ def _decrypt_saved_secret(value: Any) -> str:
 
 def _redacted_setting(value: dict[str, Any]) -> dict[str, Any]:
     redacted = dict(value)
-    for key in ("client_secret", "authentik_api_token", "credential"):
+    for key in ("client_secret", "authentik_api_token", "credential", "webhook_secret"):
         if key in redacted:
             redacted[key] = "[configured]" if redacted[key] else ""
     return redacted

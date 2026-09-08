@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 
 from pydantic import Field
+from sqlalchemy import tuple_
 
 from blank_app.models import PermissionSnapshot
 from enterprise_platform.authz import (
     CatalogPermission,
+    DataScope,
     EasyAuthPermissionClient,
+    NormalizedGrant,
 )
 from enterprise_platform.schemas import PlatformModel
+
+logger = logging.getLogger(__name__)
 
 
 def _facade():
@@ -105,15 +111,33 @@ def _catalog_map(db) -> dict[str, CatalogPermission]:
     }
 
 
-def ensure_account_snapshot(account_id: str | uuid.UUID) -> bool:
-    """外部身份登录时补齐/刷新授权快照；失败保持零权限并允许后续重试。"""
+def ensure_account_snapshot(account_id: str | uuid.UUID, *, force: bool = False) -> bool:
+    """登录可 force 拉取;失败保留最后成功行。无缓存且失败则零权限。"""
 
     parsed_id = _facade().uuid.UUID(str(account_id))
+    has_row, fresh = _load_snapshot_cache(parsed_id)
+    if has_row is None:
+        return False
+    if fresh and not force:
+        return True
+    try:
+        _facade().refresh_account_snapshot(parsed_id)
+    except _facade().HTTPException:
+        if has_row:
+            logger.warning("easyauth snapshot refresh failed; keeping last good row")
+            return True
+        return False
+    return True
+
+
+def _load_snapshot_cache(account_id: uuid.UUID) -> tuple[bool | None, bool]:
+    """无外部身份返回 (None, False);否则 (是否已有行, 行是否未过期)。"""
+
     now = _facade().datetime.now(_facade().UTC)
     with _facade().SessionLocal() as db:
-        account = db.get(_facade().Account, parsed_id)
+        account = db.get(_facade().Account, account_id)
         if account is None or not account.external_source or not account.external_user_id:
-            return False
+            return None, False
         setting = db.get(_facade().PlatformSetting, "easyauth")
         app_key = str((setting.value if setting else {}).get("app_key") or "")
         cached = (
@@ -125,13 +149,9 @@ def ensure_account_snapshot(account_id: str | uuid.UUID) -> bool:
             )
             .one_or_none()
         )
-        if cached is not None and _facade()._utc(cached.expires_at) > now:
-            return True
-    try:
-        _facade().refresh_account_snapshot(parsed_id)
-    except _facade().HTTPException:
-        return False
-    return True
+        if cached is None:
+            return False, False
+        return True, _facade()._utc(cached.expires_at) > now
 
 
 def refresh_account_snapshot(user_id: uuid.UUID) -> SnapshotResponse:
@@ -218,7 +238,7 @@ def _commit_snapshot_row(
     app_key: str,
     values: dict,
 ) -> PermissionSnapshot:
-    """原子提交 snapshot；较旧 grant_version 永远不能覆盖较新的撤权结果。"""
+    """原子提交 snapshot；较旧 (grant_version, catalog_version) 不能覆盖较新结果。"""
 
     insert_values = {
         "id": row.id or _facade().uuid.uuid4(),
@@ -244,7 +264,7 @@ def _commit_snapshot_row(
     statement = statement.on_conflict_do_update(
         constraint="uq_platform_permission_snapshot",
         set_=update_fields,
-        where=statement.excluded.grant_version >= _facade().PermissionSnapshot.grant_version,
+        where=_newer_or_equal_snapshot(statement),
     )
     db.execute(statement)
     db.commit()
@@ -259,6 +279,118 @@ def _commit_snapshot_row(
     )
     db.refresh(row)
     return row
+
+
+def _newer_or_equal_snapshot(statement):
+    """目录-only 变更也会落库;较旧 (grant_version, catalog_version) 不能覆盖。"""
+
+    return tuple_(
+        statement.excluded.grant_version,
+        statement.excluded.catalog_version,
+    ) >= tuple_(
+        _facade().PermissionSnapshot.grant_version,
+        _facade().PermissionSnapshot.catalog_version,
+    )
+
+
+def snapshot_grants_for_account(account) -> tuple[NormalizedGrant, ...]:
+    """权限检查:过期则懒刷新;刷新失败 fail-closed 为零权限。"""
+
+    if not account.external_source or not account.external_user_id:
+        return ()
+    _facade().ensure_account_snapshot(account.id, force=False)
+    with _facade().SessionLocal() as db:
+        integration = db.get(_facade().PlatformSetting, "easyauth")
+        app_key = str((integration.value if integration else {}).get("app_key") or "")
+        snapshot = (
+            db.query(_facade().PermissionSnapshot)
+            .filter(
+                _facade().PermissionSnapshot.external_source == account.external_source,
+                _facade().PermissionSnapshot.external_user_id == account.external_user_id,
+                _facade().PermissionSnapshot.app_key == app_key,
+            )
+            .one_or_none()
+        )
+        if snapshot is None or _facade()._utc(snapshot.expires_at) <= _facade().datetime.now(_facade().UTC):
+            return ()
+        return tuple(
+            NormalizedGrant(code=grant.code, scope=grant.scope)
+            for grant in _facade().normalize_grants(snapshot.grants, _grant_catalog(db))
+        )
+
+
+def _grant_catalog(db) -> dict[str, CatalogPermission]:
+    catalog: dict[str, CatalogPermission] = {}
+    for row in db.query(_facade().PermissionCatalog).all():
+        scopes: set[DataScope] = set()
+        raw_scopes = row.supported_scopes if isinstance(row.supported_scopes, list | tuple) else ()
+        for raw_scope in raw_scopes:
+            try:
+                scopes.add(DataScope(str(raw_scope)))
+            except ValueError:
+                continue
+        catalog[row.code] = CatalogPermission(
+            code=row.code,
+            supported_scopes=frozenset(scopes),
+            active=row.active,
+        )
+    return catalog
+
+
+def refresh_snapshot_for_external_user(external_user_id: str, expected_snapshot_version: str) -> None:
+    """webhook grant.changed:已持有 expected 版本则幂等成功,否则强制拉取。"""
+
+    account, stored_version = _external_snapshot_state(external_user_id)
+    if account is None:
+        return
+    if stored_version == expected_snapshot_version:
+        return
+    try:
+        _facade().refresh_account_snapshot(account.id)
+    except _facade().HTTPException:
+        _, again = _external_snapshot_state(external_user_id)
+        if again == expected_snapshot_version:
+            return
+        raise
+
+
+def invalidate_app_snapshots(app_key: str) -> None:
+    """webhook catalog.changed:把该应用缓存标记为过期,下次检查/登录再拉。"""
+
+    now = _facade().datetime.now(_facade().UTC)
+    with _facade().SessionLocal() as db:
+        db.query(_facade().PermissionSnapshot).filter(_facade().PermissionSnapshot.app_key == app_key).update(
+            {_facade().PermissionSnapshot.expires_at: now},
+            synchronize_session=False,
+        )
+        db.commit()
+
+
+def _external_snapshot_state(external_user_id: str):
+    with _facade().SessionLocal() as db:
+        account = (
+            db.query(_facade().Account)
+            .filter(
+                _facade().Account.external_source == "authentik",
+                _facade().Account.external_user_id == external_user_id,
+            )
+            .one_or_none()
+        )
+        if account is None or not account.external_source:
+            return None, None
+        setting = db.get(_facade().PlatformSetting, "easyauth")
+        app_key = str((setting.value if setting else {}).get("app_key") or "")
+        snapshot = (
+            db.query(_facade().PermissionSnapshot)
+            .filter(
+                _facade().PermissionSnapshot.external_source == account.external_source,
+                _facade().PermissionSnapshot.external_user_id == account.external_user_id,
+                _facade().PermissionSnapshot.app_key == app_key,
+            )
+            .one_or_none()
+        )
+        db.expunge(account)
+        return account, None if snapshot is None else snapshot.snapshot_version
 
 
 def _utc(value: datetime) -> datetime:

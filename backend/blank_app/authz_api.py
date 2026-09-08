@@ -80,6 +80,7 @@ _utc = authz_snapshot._utc
 ensure_account_snapshot = authz_snapshot.ensure_account_snapshot
 refresh_account_snapshot = authz_snapshot.refresh_account_snapshot
 seed_platform_catalog = authz_snapshot.seed_platform_catalog
+snapshot_grants_for_account = authz_snapshot.snapshot_grants_for_account
 
 _create_descriptor_key = authz_descriptor._create_descriptor_key
 _current_manifest = authz_descriptor._current_manifest
@@ -229,7 +230,7 @@ def resolve_trusted_principal(headers: dict[str, str]) -> str | None:
         db.commit()
         db.refresh(account)
         account_id = str(account.id)
-    ensure_account_snapshot(account_id)
+    ensure_account_snapshot(account_id, force=True)
     return account_id
 
 
@@ -329,10 +330,6 @@ def _authorization_settings() -> EasyAuthStatus:
     return EasyAuthStatus.model_validate(_get_setting("easyauth") or {})
 
 
-def _save_authorization_settings(payload: EasyAuthSettingsUpdate, *, actor_id: str) -> EasyAuthStatus:
-    return BlankIntegrationAdapter().save_easyauth_settings(payload, actor_id=actor_id)
-
-
 def _my_grants(*, actor_id: str) -> list[MyGrantResponse]:
     with SessionLocal() as db:
         account = db.get(Account, actor_id)
@@ -386,21 +383,7 @@ class BlankAuthorizationOperations:
         return AuthorizationSettings.model_validate(value.model_dump(by_alias=True))
 
     def save_settings(self, payload: AuthorizationSettingsUpdate, *, actor_id: str) -> AuthorizationSettings:
-        current = _get_setting("easyauth")
-        base_url = payload.base_url if payload.base_url is not None else str(current.get("base_url") or "")
-        app_key = payload.app_key if payload.app_key is not None else str(current.get("app_key") or "")
-        if not base_url or not app_key:
-            raise AuthError(422, "baseUrl and appKey are required for the blank host")
-        saved = _save_authorization_settings(
-            EasyAuthSettingsUpdate(
-                base_url=base_url,
-                app_key=app_key,
-                credential=payload.credential,
-                permission_request_url=payload.permission_request_url,
-            ),
-            actor_id=actor_id,
-        )
-        return AuthorizationSettings.model_validate(saved.model_dump(by_alias=True))
+        return BlankIntegrationAdapter().save_authorization_update(payload, actor_id=actor_id)
 
     def list_catalog(self, *, search: str | None, active: bool | None) -> list[AuthorizationCatalogItem]:
         with SessionLocal() as db:
@@ -495,6 +478,12 @@ class BlankAuthorizationOperations:
             },
         )
         return result
+
+    def refresh_snapshot_for_external_user(self, external_user_id: str, expected_snapshot_version: str) -> None:
+        authz_snapshot.refresh_snapshot_for_external_user(external_user_id, expected_snapshot_version)
+
+    def invalidate_app_snapshots(self, app_key: str) -> None:
+        authz_snapshot.invalidate_app_snapshots(app_key)
 
     def manifest(self, *, schema_version: int | None, actor_id: str) -> dict:
         if schema_version not in {None, FRAMEWORK_MANIFEST.schema_version}:
@@ -623,6 +612,7 @@ __all__ = [
     "router",
     "secrets",
     "seed_platform_catalog",
+    "snapshot_grants_for_account",
     "test_easyauth_connection",
     "uuid",
     "validate_principal_config",

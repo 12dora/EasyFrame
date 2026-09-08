@@ -24,6 +24,15 @@ def _facade():
 descriptor_router = APIRouter()
 
 
+def _manifest_app(app_key: str) -> dict:
+    return {
+        "app_key": app_key,
+        "name": "Enterprise Blank",
+        "description": "Reusable enterprise application framework",
+        "is_active": True,
+    }
+
+
 def _current_manifest() -> dict:
     """生成与 EasyAuth app SDK 0.3 descriptor 兼容的当前 manifest。"""
 
@@ -40,12 +49,7 @@ def _current_manifest() -> dict:
     domains = sorted({permission.domain for permission in _facade().FRAMEWORK_MANIFEST.permissions})
     return {
         "schema_version": _facade().FRAMEWORK_MANIFEST.schema_version,
-        "app": {
-            "app_key": configured_app_key,
-            "name": "Enterprise Blank",
-            "description": "Reusable enterprise application framework",
-            "is_active": True,
-        },
+        "app": _manifest_app(configured_app_key),
         "scopes": [{"key": scope, "name": scope, "name_en": scope} for scope in scopes],
         "permission_groups": [
             {"key": domain, "name": domain, "name_en": domain, "parent_key": None} for domain in domains
@@ -65,6 +69,7 @@ def _current_manifest() -> dict:
         "authorization_groups": [],
         "approval_rules": [],
         "capabilities": ["directory", "notify"],
+        "webhook": {"signing": "hmac-sha256", "events_url": "/api/v1/easyauth/events"},
     }
 
 

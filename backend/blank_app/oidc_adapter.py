@@ -74,7 +74,7 @@ class BlankOidcHost:
             account_id = str(account.id)
         from blank_app.authz_api import ensure_account_snapshot
 
-        ensure_account_snapshot(account_id)
+        ensure_account_snapshot(account_id, force=True)
         return account_id
 
     def issue_session(self, account_id: str) -> str:

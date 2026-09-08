@@ -26,7 +26,7 @@ from passlib.context import CryptContext
 from sqlalchemy import and_, delete, func, or_, update
 from sqlalchemy.exc import IntegrityError
 
-from blank_app import adapter_account, adapter_platform, adapter_support
+from blank_app import adapter_account, adapter_platform, adapter_support, authz_snapshot
 from blank_app.database import SessionLocal
 from blank_app.models import (
     Account,
@@ -71,6 +71,8 @@ from enterprise_platform.oidc_settings import (
 from enterprise_platform.ports import LocalAccount, PasskeyChallenge
 from enterprise_platform.safe_http import UnsafeOutboundUrlError, guarded_request
 from enterprise_platform.schemas import (
+    AuthorizationSettings,
+    AuthorizationSettingsUpdate,
     ConnectionTestResult,
     CurrentUser,
     DirectorySettings,
@@ -158,12 +160,15 @@ _as_utc = adapter_platform._as_utc
 _decode_notification_cursor = adapter_platform._decode_notification_cursor
 _encode_notification_cursor = adapter_platform._encode_notification_cursor
 _health_summary_code = adapter_platform._health_summary_code
+snapshot_grants_for_account = authz_snapshot.snapshot_grants_for_account
 
 __all__ = [
     "ALL_PERMISSIONS",
     "Account",
     "Any",
     "AuthError",
+    "AuthorizationSettings",
+    "AuthorizationSettingsUpdate",
     "BASELINE_SELF_SERVICE",
     "BlankAccountAdapter",
     "BlankDirectoryAdapter",
@@ -276,6 +281,7 @@ __all__ = [
     "shared_auth_secrets",
     "shared_passkeys",
     "signing_key",
+    "snapshot_grants_for_account",
     "timedelta",
     "update",
     "uuid",

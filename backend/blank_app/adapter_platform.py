@@ -7,6 +7,8 @@ from datetime import datetime
 
 from blank_app.models import Notification
 from enterprise_platform.schemas import (
+    AuthorizationSettings,
+    AuthorizationSettingsUpdate,
     ConnectionTestResult,
     DirectorySettings,
     DirectorySettingsUpdate,
@@ -151,6 +153,18 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=_facade().UTC)
 
 
+def _next_easyauth_secrets(payload: EasyAuthSettingsUpdate, old: dict, *, authority_changed: bool) -> tuple[str, str]:
+    credential = payload.credential
+    if authority_changed and not credential:
+        raise _facade().AuthError(422, "EasyAuth authority 或 appKey 变更时必须重新填写 credential")
+    if credential is None:
+        credential = _facade()._decrypt_saved_secret(old.get("credential"))
+    webhook_secret = payload.webhook_secret
+    if webhook_secret is None:
+        webhook_secret = _facade()._decrypt_saved_secret(old.get("webhook_secret"))
+    return credential or "", webhook_secret or ""
+
+
 class BlankIntegrationAdapter:
     def get_oidc_settings(self) -> OidcSettings:
         data = _facade()._get_setting("oidc")
@@ -271,23 +285,47 @@ class BlankIntegrationAdapter:
             old.get("base_url", "").rstrip("/") != payload.base_url.rstrip("/")
             or old.get("app_key", "") != payload.app_key
         )
-        credential = payload.credential
-        if authority_changed and not credential:
-            raise _facade().AuthError(422, "EasyAuth authority 或 appKey 变更时必须重新填写 credential")
-        if credential is None:
-            credential = _facade()._decrypt_saved_secret(old.get("credential"))
-        credential = credential or ""
+        credential, webhook_secret = _next_easyauth_secrets(payload, old, authority_changed=authority_changed)
         data = {
             "configured": bool(payload.base_url and payload.app_key and credential),
             "base_url": payload.base_url.rstrip("/"),
             "app_key": payload.app_key,
             "auth_mode": "static_app_token",
             "has_credential": bool(credential),
+            "has_webhook_secret": bool(webhook_secret),
             "permission_request_url": payload.permission_request_url,
             "credential": _facade().encrypt_secret(credential),
+            "webhook_secret": _facade().encrypt_secret(webhook_secret),
         }
         _facade()._save_setting("easyauth", data, actor_id=actor_id, action="authz.settings.update")
         return _facade().EasyAuthStatus.model_validate(data)
+
+    def save_authorization_update(
+        self, payload: AuthorizationSettingsUpdate, *, actor_id: str
+    ) -> AuthorizationSettings:
+        current = _facade()._get_setting("easyauth")
+        base_url = payload.base_url if payload.base_url is not None else str(current.get("base_url") or "")
+        app_key = payload.app_key if payload.app_key is not None else str(current.get("app_key") or "")
+        if not base_url or not app_key:
+            raise _facade().AuthError(422, "baseUrl and appKey are required for the blank host")
+        saved = self.save_easyauth_settings(
+            _facade().EasyAuthSettingsUpdate(
+                base_url=base_url,
+                app_key=app_key,
+                credential=payload.credential,
+                webhook_secret=payload.webhook_secret,
+                permission_request_url=payload.permission_request_url,
+            ),
+            actor_id=actor_id,
+        )
+        return _facade().AuthorizationSettings.model_validate(saved.model_dump(by_alias=True))
+
+    def get_easyauth_webhook_secret(self) -> str:
+        data = _facade()._get_setting("easyauth")
+        try:
+            return _facade().decrypt_secret(str(data.get("webhook_secret") or ""))
+        except _facade().SecretConfigurationError:
+            return ""
 
     def save_permission_request_url(self, payload: PermissionRequestUrlUpdate, *, actor_id: str) -> EasyAuthStatus:
         old = _facade()._get_setting("easyauth")

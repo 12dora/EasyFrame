@@ -24,6 +24,7 @@ from blank_app.adapters import (
     validate_signing_secrets,
 )
 from blank_app.authz_api import (
+    BlankAuthorizationOperations,
     descriptor_router,
     resolve_trusted_principal,
     seed_platform_catalog,
@@ -49,6 +50,7 @@ SENSITIVE_PATH_PREFIXES = (
     "/api/v1/users/me",
     "/api/v1/identity-integration",
     "/api/v1/authz-integration",
+    "/api/v1/easyauth",
     "/api/v1/notifications",
     "/api/v1/local-accounts",
     "/.well-known/easyauth-app.json",
@@ -109,6 +111,7 @@ ports = PlatformPorts(
     directory=BlankDirectoryAdapter(),
     upstream_health=BlankUpstreamHealthAdapter(),
     require_permission=require_permission,
+    authorization=BlankAuthorizationOperations(),
 )
 
 

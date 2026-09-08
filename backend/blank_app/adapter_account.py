@@ -696,31 +696,7 @@ def _catalog_permissions(db) -> dict[str, CatalogPermission]:
 
 
 def _snapshot_grants(account: Account) -> tuple[NormalizedGrant, ...]:
-    if not account.external_source or not account.external_user_id:
-        return ()
-    with _facade().SessionLocal() as db:
-        integration = db.get(_facade().PlatformSetting, "easyauth")
-        app_key = str((integration.value if integration else {}).get("app_key") or "")
-        snapshot = (
-            db.query(_facade().PermissionSnapshot)
-            .filter(
-                _facade().PermissionSnapshot.external_source == account.external_source,
-                _facade().PermissionSnapshot.external_user_id == account.external_user_id,
-                _facade().PermissionSnapshot.app_key == app_key,
-            )
-            .one_or_none()
-        )
-        if snapshot is None:
-            return ()
-        expires_at = snapshot.expires_at
-        if (expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=_facade().UTC)) <= _facade().datetime.now(
-            _facade().UTC
-        ):
-            return ()
-        return tuple(
-            _facade().NormalizedGrant(code=grant.code, scope=grant.scope)
-            for grant in _facade().normalize_grants(snapshot.grants, _facade()._catalog_permissions(db))
-        )
+    return _facade().snapshot_grants_for_account(account)
 
 
 def _local_grants(account: Account) -> tuple[NormalizedGrant, ...]:
