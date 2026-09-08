@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 
 from enterprise_platform.assembly.contracts import AUTHZ_MANAGE, AUTHZ_VIEW, IDENTITY_MANAGE, IDENTITY_VIEW
 from enterprise_platform.assembly.dependencies import AssemblyDependencies
+from enterprise_platform.assembly.easyauth_event_routes import register_easyauth_event_routes
 from enterprise_platform.response_redaction import (
     has_permission,
     present_authorization_settings,
@@ -41,6 +42,7 @@ def register_integration_routes(router: APIRouter, ctx: AssemblyDependencies) ->
     _register_test_directory(router, ctx)
     _register_sync_directory(router, ctx)
     _register_test_oidc(router, ctx)
+    register_easyauth_event_routes(router, ctx)
     if ctx.include_authz_integration:
         _register_easy_auth_status(router, ctx)
         _register_save_easy_auth(router, ctx)

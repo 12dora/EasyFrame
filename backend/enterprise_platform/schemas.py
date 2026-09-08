@@ -279,6 +279,7 @@ class EasyAuthStatus(PlatformModel):
     app_key: str = ""
     auth_mode: str = ""
     has_credential: bool = False
+    has_webhook_secret: bool = False
     permission_request_url: str = ""
 
 
@@ -286,6 +287,7 @@ class EasyAuthSettingsUpdate(StrictPlatformModel):
     base_url: str = Field(max_length=2000)
     app_key: str = Field(max_length=200)
     credential: str | None = Field(default=None, max_length=4000)
+    webhook_secret: str | None = Field(default=None, max_length=4000)
     permission_request_url: str = Field(default="", max_length=2000)
 
     @field_validator("base_url")
@@ -502,6 +504,7 @@ class AuthorizationSettings(PlatformModel):
     app_key: str = ""
     auth_mode: str = ""
     has_credential: bool = False
+    has_webhook_secret: bool = False
     permission_request_url: str = ""
 
 
@@ -517,6 +520,7 @@ class AuthorizationSettingsUpdate(StrictPlatformModel):
     base_url: str | None = Field(default=None, max_length=2000)
     app_key: str | None = Field(default=None, max_length=200)
     credential: str | None = Field(default=None, max_length=4000)
+    webhook_secret: str | None = Field(default=None, max_length=4000)
     permission_request_url: str = Field(default="", max_length=2000)
 
     @field_validator("base_url")

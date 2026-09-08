@@ -38,6 +38,7 @@ def _prefix_rules(groups: PlatformRouteGroups, include_authz_integration: bool) 
         _PrefixRule("/notifications", lambda: groups.notifications),
         _PrefixRule("/identity-integration", lambda: groups.identity),
         _PrefixRule("/authz-integration", lambda: groups.easyauth and include_authz_integration),
+        _PrefixRule("/easyauth", lambda: groups.easyauth),
         _PrefixRule("/ops/upstream-health", lambda: groups.upstream),
     )
 

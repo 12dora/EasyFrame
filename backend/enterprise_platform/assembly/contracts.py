@@ -10,6 +10,7 @@ from fastapi import Request
 
 from enterprise_platform.ports import (
     AccountPort,
+    AuthorizationOperationsPort,
     DirectoryPort,
     FooterPort,
     IntegrationPort,
@@ -42,6 +43,7 @@ class PlatformPorts:
     directory: DirectoryPort
     upstream_health: UpstreamHealthPort
     require_permission: PermissionCheck
+    authorization: AuthorizationOperationsPort | None = None
 
 
 def _noop_before_password_login(_username: str, _request: Request) -> None:
