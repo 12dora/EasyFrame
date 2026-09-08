@@ -39,6 +39,14 @@ from enterprise_platform.easyauth.types import (
     DirectoryUnavailableError,
     DirectoryUserRecord,
 )
+from enterprise_platform.easyauth.webhook import (
+    CATALOG_CHANGED_EVENT,
+    GRANT_CHANGED_EVENT,
+    WEBHOOK_TEST_EVENT,
+    WebhookEvent,
+    WebhookVerificationError,
+    verify_webhook,
+)
 
 __all__ = [
     "DirectoryAccessError",
@@ -69,5 +77,11 @@ __all__ = [
     "NotifyUnavailableError",
     "OAUTH_CLIENT_CREDENTIALS",
     "STATIC_APP_TOKEN",
+    "CATALOG_CHANGED_EVENT",
+    "GRANT_CHANGED_EVENT",
+    "WEBHOOK_TEST_EVENT",
+    "WebhookEvent",
+    "WebhookVerificationError",
     "resolve_bearer_token",
+    "verify_webhook",
 ]
