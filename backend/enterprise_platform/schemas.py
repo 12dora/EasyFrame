@@ -148,6 +148,11 @@ class GeneralSettingsUpdate(StrictPlatformModel):
     footer_html_en: str = Field(max_length=20_000)
     logo_data_url: str | None = None
 
+    @field_validator("title_zh", "title_en", "subtitle_zh", "subtitle_en", mode="before")
+    @classmethod
+    def trim_plain_text_fields(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
 
 class SecurityCapabilities(PlatformModel):
     """宿主按运行模式公开的本地认证能力；前端仍须与权限取交集。"""

@@ -223,6 +223,49 @@ def test_put_general_rejects_markup_in_title() -> None:
         assert "尖括号" in response.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"titleZh": "x" * 81},
+        {"subtitleZh": "x" * 201},
+        {"footerHtmlZh": "x" * 20_001},
+        {"titleZh": "a<b"},
+    ],
+)
+def test_put_general_rejects_overlong_fields_and_markup(overrides: dict[str, object]) -> None:
+    from blank_app.main import app
+
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        response = client.put(_GENERAL, headers=headers, json=_general_body(**overrides))
+        assert response.status_code == 422
+
+
+def test_put_general_accepts_whitespace_padded_title_at_limit() -> None:
+    from blank_app.main import app
+
+    title = "T" * 80
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        response = client.put(_GENERAL, headers=headers, json=_general_body(titleZh=f"  {title}  "))
+        assert response.status_code == 200, response.text
+        assert response.json()["titleZh"] == title
+        assert client.get(_GENERAL).json()["titleZh"] == title
+
+
+def test_put_general_drops_malformed_footer_href() -> None:
+    from blank_app.main import app
+
+    html = '<a href="http://[broken]">link</a>'
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        response = client.put(_GENERAL, headers=headers, json=_general_body(footerHtmlZh=html))
+        assert response.status_code == 200, response.text
+        body = response.json()["footerHtmlZh"]
+        assert "http://[broken]" not in body
+        assert "link" in body
+
+
 def test_put_footer_shim_leaves_title_and_logo_untouched() -> None:
     from blank_app.main import app
 

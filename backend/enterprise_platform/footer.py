@@ -101,7 +101,10 @@ def clean_href(value: str) -> str | None:
     href = value.strip()
     if not href or any(ord(char) < 32 or ord(char) == 127 for char in href):
         return None
-    parsed = urlsplit(href)
+    try:
+        parsed = urlsplit(href)
+    except ValueError:
+        return None
     scheme = parsed.scheme.lower()
     if scheme not in ALLOWED_LINK_SCHEMES:
         return None
