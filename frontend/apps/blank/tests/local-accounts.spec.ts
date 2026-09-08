@@ -403,7 +403,10 @@ for (const locale of locales) {
       await expect(page.locator(`a[href="${accountsHref}"]`)).toHaveCount(0);
       await page.goto(accountsHref);
       await expect(page.locator('[data-test-id="permission-denied"]')).toBeVisible();
-      await expect(page.locator('[data-test-id="enterprise-local-accounts"]')).toHaveCount(0);
+      // 无权限页仍渲染叶子标题（单一 H1），但绝不渲染任何账号数据。
+      await expect(page.locator("main h1")).toHaveCount(1);
+      await expect(page.locator('[data-test-id="local-accounts-table"]')).toHaveCount(0);
+      await expect(page.locator("body")).not.toContainText("operator");
     });
 
     test("page renders table with mocked list response", async ({ page }) => {

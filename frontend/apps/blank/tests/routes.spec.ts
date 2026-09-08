@@ -2,14 +2,20 @@ import { expect, test, type Page } from "@playwright/test";
 
 const locales = ["zh-CN", "en"];
 
-async function mockPlatform(page: Page) {
+const defaultGeneral = { titleZh: "", titleEn: "", subtitleZh: "", subtitleEn: "", footerHtmlZh: "企业框架 · © {year}", footerHtmlEn: "Enterprise framework · © {year}", logoDataUrl: null };
+
+async function mockPlatform(page: Page, general: Record<string, unknown> = defaultGeneral) {
+  let stored = { ...general };
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const json = (body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    if (path === "/api/v1/app-settings/general") {
+      if (route.request().method() === "PUT") { stored = { ...stored, ...(JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>) }; }
+      return json(stored);
+    }
     if (path === "/api/v1/auth/oidc/status") return json({ enabled: false, authorizePath: "" });
     if (path === "/api/v1/auth/me") return json({ id: "u1", name: "Framework Admin", email: "admin@example.com", avatarUrl: null, hasLocalPassword: true, permissions: ["auth.totp.create", "auth.totp.advance", "auth.passkey.view", "auth.passkey.create", "identity.integration.view", "identity.integration.manage", "authz.integration.view", "authz.integration.manage", "ops.upstream_health.view", "ops.upstream_health.manage", "notification.center.view", "settings.app_setting.update"], securityCapabilities: { passwordChange: true, totpStatus: true, totpEnroll: true, totpDisable: true, passkeyList: true, passkeyRegister: true, passkeyDelete: true }, grants: [{ permissionCode: "authz.integration.view", dataScope: "ALL" }] });
     if (path === "/api/v1/notifications") return json({ items: [], unreadCount: 0, nextCursor: null });
-    if (path === "/api/v1/app-settings/general") return json({ titleZh: "", titleEn: "", subtitleZh: "", subtitleEn: "", footerHtmlZh: "企业框架 · © {year}", footerHtmlEn: "Enterprise framework · © {year}", logoDataUrl: null });
     if (path === "/api/v1/users/me/totp/status") return json({ enabled: false });
     if (path === "/api/v1/users/me/passkeys") return json([]);
     if (path === "/api/v1/identity-integration/settings") return json({ enabled: false, issuer: "", authorizationEndpoint: "", tokenEndpoint: "", jwksUri: "", userinfoEndpoint: "", clientId: "", hasClientSecret: false, scopes: "openid profile email", redirectBaseUrl: "", redirectUri: "", frontendBaseUrl: "", serverBaseUrl: "", authentikApiBaseUrl: "", hasAuthentikApiToken: false, userSyncEnabled: false, userSyncIntervalMinutes: 30 });
@@ -31,7 +37,22 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
   test.beforeEach(async ({ page }) => { await mockPlatform(page); });
   test("shared shell and framework routes are reachable", async ({ page }) => {
     await page.goto(`/${locale}/app`); await expect(page.locator('[data-test-id="blank-workbench"]')).toBeVisible(); await expect(page.locator('[data-test-id="admin-topbar-actions"]')).toBeVisible(); await expect(page.locator("main")).toHaveCount(1);
-    for (const [path, marker] of [["security", "enterprise-security-settings"], ["access", "enterprise-access-settings"], ["upstream", "upstream-health-page"], ["general", "general-settings-page"]] as const) { await page.goto(`/${locale}/app/settings/${path}`); await expect(page.locator(`[data-test-id="${marker}"]`)).toBeVisible(); }
+
+    // 未配置名称/副标题/标志时，品牌槽回落到 i18n 名称 + 内置标志，且不显示副标题。
+    await expect(page.locator('[data-test-id="app-brand-title"]')).toHaveText(locale === "en" ? "Enterprise Starter" : "企业应用框架");
+    await expect(page.locator('[data-test-id="app-brand-logo"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="app-brand-subtitle"]')).toHaveCount(0);
+    // 登录后的应用框架同样固定页脚。
+    await expect(page.locator('[data-test-id="app-footer-html"]')).toContainText(locale === "en" ? "Enterprise framework" : "企业框架");
+    await expect(page.locator('[data-test-id="topbar-user-role"]')).toHaveText(locale === "en" ? "User" : "用户");
+
+    for (const [path, marker] of [["general", "general-settings-page"], ["security", "enterprise-security-settings"], ["access", "enterprise-access-settings"], ["upstream", "upstream-health-page"]] as const) { await page.goto(`/${locale}/app/settings/${path}`); await expect(page.locator(`[data-test-id="${marker}"]`)).toBeVisible(); }
+    // 设置页只保留最内层标题，框架不再叠加「设置」大标题；「通用」排在设置菜单首位。
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/${locale}/app/settings/general`);
+    await expect(page.locator('[data-test-id="enterprise-settings-page"]')).toBeVisible();
+    await expect(page.locator("main h1")).toHaveText(locale === "en" ? "General" : "通用");
+    await expect(page.locator(`aside a[href^="/${locale}/app/settings/"]`).first()).toHaveAttribute("href", `/${locale}/app/settings/general`);
     let checkRequests = 0;
     await page.route("**/api/v1/ops/upstream-health/checks", async (route) => {
       checkRequests += 1;
@@ -67,6 +88,8 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(page).toHaveTitle(locale === "en" ? "Enterprise Starter" : "企业应用框架");
     await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", locale === "en" ? "Identity-ready enterprise application foundation" : "统一身份与企业应用基础设施");
     await expect(page.locator('[data-test-id="public-top-nav"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="public-brand-title"]')).toHaveText(locale === "en" ? "Enterprise Starter" : "企业应用框架");
+    await expect(page.locator('[data-test-id="public-brand-logo"]')).toBeVisible();
     expect(response?.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");
     expect(response?.headers()["x-frame-options"]).toBe("DENY");
     await page.goto(`/${locale}/logged-out`); await expect(page.locator('[data-test-id="logged-out-page"]')).toBeVisible();
@@ -202,7 +225,7 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     const loginCopy = locale === "en" ? ["Login & Permissions", "Authentik / OIDC configuration"] : ["登录与权限", "Authentik / OIDC 配置"];
     for (const text of loginCopy) await expect(page.getByText(text, { exact: true }).first()).toBeVisible();
     await page.locator('[data-test-id="settings-auth-tab-permissions"]').click();
-    const permissionCopy = locale === "en" ? ["EasyAuth authorization", "My grants", "Descriptor keys"] : ["EasyAuth 授权", "我的授权", "Descriptor 密钥"];
+    const permissionCopy = locale === "en" ? ["Permissions service authorization", "My grants", "Application info keys"] : ["权限服务授权", "我的授权", "应用信息密钥"];
     for (const text of permissionCopy) await expect(page.getByText(text, { exact: true }).first()).toBeVisible();
     await expect(page.locator("body")).not.toContainText(locale === "en" ? "我的授权" : "My grants");
     await page.goto(`/${locale}/app/settings/upstream`);
@@ -211,6 +234,45 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(page.getByText(locale === "en" ? "This host does not provide this capability" : "当前宿主不提供此能力", { exact: true }).first()).toBeVisible();
     await expect(page.locator("body")).not.toContainText("raw-secret-error");
     await expect(page.locator("body")).not.toContainText("后端中文摘要");
+  });
+  test("configured general settings drive the brand and footer in both shells", async ({ page }) => {
+    const logo = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    await mockPlatform(page, { titleZh: "捷发企业", titleEn: "Jiefa Enterprise", subtitleZh: "统一工作台", subtitleEn: "Unified workbench", footerHtmlZh: "捷发 · © {year}", footerHtmlEn: "Jiefa · © {year}", logoDataUrl: logo });
+    const expected = locale === "en" ? { title: "Jiefa Enterprise", subtitle: "Unified workbench", footer: "Jiefa" } : { title: "捷发企业", subtitle: "统一工作台", footer: "捷发" };
+
+    await page.goto(`/${locale}/app`);
+    await expect(page.locator('[data-test-id="app-brand-title"]')).toHaveText(expected.title);
+    await expect(page.locator('[data-test-id="app-brand-subtitle"]')).toHaveText(expected.subtitle);
+    await expect(page.locator('[data-test-id="app-brand-logo"]')).toHaveAttribute("src", logo);
+    await expect(page.locator('[data-test-id="app-footer-html"]')).toContainText(`${expected.footer} · © ${new Date().getFullYear()}`);
+
+    await page.goto(`/${locale}/login`);
+    await expect(page.locator('[data-test-id="public-brand-title"]')).toHaveText(expected.title);
+    await expect(page.locator('[data-test-id="public-brand-subtitle"]')).toHaveText(expected.subtitle);
+    await expect(page.locator('[data-test-id="app-footer-html"]')).toContainText(expected.footer);
+  });
+  test("saving general settings re-brands the shell without a reload", async ({ page }) => {
+    await page.goto(`/${locale}/app/settings/general`);
+    await expect(page.locator('[data-test-id="general-settings-page"]')).toBeVisible();
+    await page.locator('[data-test-id="general-title-zh"]').fill("捷发企业");
+    await page.locator('[data-test-id="general-subtitle-zh"]').fill("统一工作台");
+    await page.locator('[data-test-id="general-locale-tab-en"]').click();
+    await page.locator('[data-test-id="general-title-en"]').fill("Jiefa Enterprise");
+    await page.locator('[data-test-id="general-subtitle-en"]').fill("Unified workbench");
+    const saved = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/v1/app-settings/general" && request.method() === "PUT");
+    await page.locator('[data-test-id="app-settings-save"]').click();
+    await saved;
+    await expect(page.locator('[data-test-id="app-brand-title"]')).toHaveText(locale === "en" ? "Jiefa Enterprise" : "捷发企业");
+    await expect(page.locator('[data-test-id="app-brand-subtitle"]')).toHaveText(locale === "en" ? "Unified workbench" : "统一工作台");
+  });
+  test("the identity line reports the local superadmin and an account with no grants", async ({ page }) => {
+    await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "root", name: "Root", hasLocalPassword: true, isLocalSuperadmin: true, permissions: ["accounts.local.view"] }) }));
+    await page.goto(`/${locale}/app`);
+    await expect(page.locator('[data-test-id="topbar-user-role"]')).toHaveText(locale === "en" ? "Administrator" : "管理员");
+
+    await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "guest", name: "Guest", hasLocalPassword: false, permissions: [] }) }));
+    await page.goto(`/${locale}/app`);
+    await expect(page.locator('[data-test-id="topbar-user-role"]')).toHaveText(locale === "en" ? "Guest" : "游客");
   });
   test("must-change-password is enforced on direct and refreshed protected routes", async ({ page }) => {
     await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "forced", name: "Forced user", hasLocalPassword: true, mustChangePassword: true, permissions: [], securityCapabilities: { passwordChange: true, totpStatus: false, totpEnroll: false, totpDisable: false, passkeyList: false, passkeyRegister: false, passkeyDelete: false } }) }));
