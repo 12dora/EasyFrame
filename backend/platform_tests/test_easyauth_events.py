@@ -159,6 +159,24 @@ def test_missing_app_key_is_unprocessable() -> None:
     assert authz.refreshed == []
 
 
+def test_grant_changed_missing_user_id_is_unprocessable() -> None:
+    client, authz = _client()
+    body = _payload(GRANT_CHANGED_EVENT, app_key="enterprise-blank", snapshot_version="4.2")
+    response = client.post("/api/v1/easyauth/events", content=body, headers=_signed(body, event=GRANT_CHANGED_EVENT))
+    assert response.status_code == 422
+    assert response.json() == {"error": "invalid_payload"}
+    assert authz.refreshed == []
+
+
+def test_grant_changed_missing_snapshot_version_is_unprocessable() -> None:
+    client, authz = _client()
+    body = _payload(GRANT_CHANGED_EVENT, app_key="enterprise-blank", user_id="ak-user-1")
+    response = client.post("/api/v1/easyauth/events", content=body, headers=_signed(body, event=GRANT_CHANGED_EVENT))
+    assert response.status_code == 422
+    assert response.json() == {"error": "invalid_payload"}
+    assert authz.refreshed == []
+
+
 def test_malformed_timestamp_is_unauthorized() -> None:
     client, authz = _client()
     body = _payload(WEBHOOK_TEST_EVENT)
