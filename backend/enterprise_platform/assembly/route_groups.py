@@ -34,13 +34,19 @@ def _prefix_rules(groups: PlatformRouteGroups, include_authz_integration: bool) 
         _PrefixRule("/users/me/password", lambda: groups.password, exact=True),
         _PrefixRule("/users/me/totp", lambda: groups.totp),
         _PrefixRule("/auth/", lambda: groups.auth),
-        _PrefixRule("/app-settings/footer", lambda: groups.footer),
+        _PrefixRule("/app-settings", lambda: _app_settings_enabled(groups)),
         _PrefixRule("/notifications", lambda: groups.notifications),
         _PrefixRule("/identity-integration", lambda: groups.identity),
         _PrefixRule("/authz-integration", lambda: groups.easyauth and include_authz_integration),
         _PrefixRule("/easyauth", lambda: groups.easyauth),
         _PrefixRule("/ops/upstream-health", lambda: groups.upstream),
     )
+
+
+def _app_settings_enabled(groups: PlatformRouteGroups) -> bool:
+    """`app_settings` 为规范开关;`footer` 为兼容别名。"""
+
+    return groups.app_settings if groups.footer is None else groups.footer
 
 
 def _route_enabled(path: str, rules: tuple[_PrefixRule, ...]) -> bool:

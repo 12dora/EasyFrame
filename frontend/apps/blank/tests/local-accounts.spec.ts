@@ -220,8 +220,8 @@ async function mockPlatform(page: Page, options: MockPlatformOptions | string[] 
       });
     }
     if (path === "/api/v1/notifications") return json({ items: [], unreadCount: 0, nextCursor: null });
-    if (path === "/api/v1/app-settings/footer") {
-      return json({ footerHtmlZh: "企业框架 · © {year}", footerHtmlEn: "Enterprise framework · © {year}" });
+    if (path === "/api/v1/app-settings/general") {
+      return json({ titleZh: "", titleEn: "", subtitleZh: "", subtitleEn: "", footerHtmlZh: "企业框架 · © {year}", footerHtmlEn: "Enterprise framework · © {year}", logoDataUrl: null });
     }
     if (path === "/api/v1/users/me/totp/status") return json({ enabled: false });
     if (path === "/api/v1/users/me/passkeys") return json([]);

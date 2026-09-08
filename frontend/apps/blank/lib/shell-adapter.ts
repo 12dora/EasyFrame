@@ -34,7 +34,15 @@ export interface ShellIdentity {
   isLocalSuperadmin: boolean;
 }
 export interface ShellReminder { id: string; title: string; detail: string; urgent: boolean; }
-export interface ShellFooterSettings { footerHtmlZh: string; footerHtmlEn: string; }
+export interface ShellGeneralSettings {
+  titleZh: string;
+  titleEn: string;
+  subtitleZh: string;
+  subtitleEn: string;
+  footerHtmlZh: string;
+  footerHtmlEn: string;
+  logoDataUrl: string | null;
+}
 
 export async function loadShellIdentity(fallbackName: string, roleGroupSeparator: string, notAvailable: string): Promise<ShellIdentity> {
   const user = await platformRequest<CurrentUser>("/api/v1/auth/me");
@@ -64,4 +72,4 @@ export async function loadShellIdentity(fallbackName: string, roleGroupSeparator
 export async function loadNotifications(): Promise<ShellReminder[]> { const result = await platformRequest<NotificationPage>("/api/v1/notifications?limit=100"); return result.items.filter((item) => !item.readAt).map((item) => ({ id: item.id, title: item.title, detail: item.body, urgent: item.level === "error" || item.level === "warning" })); }
 export function dismissNotification(id: string) { return platformRequest<{ ok: boolean }>(`/api/v1/notifications/${encodeURIComponent(id)}/read`, { method: "POST" }); }
 export function dismissAllNotifications() { return platformRequest<{ updated: number }>("/api/v1/notifications/read-all", { method: "POST" }); }
-export function loadFooterSettings() { return platformRequest<ShellFooterSettings>("/api/v1/app-settings/footer"); }
+export function loadGeneralSettings() { return platformRequest<ShellGeneralSettings>("/api/v1/app-settings/general"); }

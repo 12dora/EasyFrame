@@ -7,8 +7,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from blank_app.adapters import (
+    BlankAppSettingsAdapter,
     BlankDirectoryAdapter,
-    BlankFooterAdapter,
     BlankIntegrationAdapter,
     BlankNotificationAdapter,
     BlankUpstreamHealthAdapter,
@@ -105,7 +105,7 @@ async def auth_failure_handler(_request: Request, exc: AuthError) -> JSONRespons
 
 ports = PlatformPorts(
     account=account_adapter,
-    footer=BlankFooterAdapter(),
+    app_settings=BlankAppSettingsAdapter(),
     notifications=BlankNotificationAdapter(),
     integrations=BlankIntegrationAdapter(),
     directory=BlankDirectoryAdapter(),

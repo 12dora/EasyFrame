@@ -129,6 +129,26 @@ class FooterSettingsUpdate(StrictPlatformModel):
     footer_html_en: str = Field(max_length=20_000)
 
 
+class GeneralSettings(PlatformModel):
+    title_zh: str = ""
+    title_en: str = ""
+    subtitle_zh: str = ""
+    subtitle_en: str = ""
+    footer_html_zh: str
+    footer_html_en: str
+    logo_data_url: str | None = None
+
+
+class GeneralSettingsUpdate(StrictPlatformModel):
+    title_zh: str = Field(max_length=80)
+    title_en: str = Field(max_length=80)
+    subtitle_zh: str = Field(max_length=200)
+    subtitle_en: str = Field(max_length=200)
+    footer_html_zh: str = Field(max_length=20_000)
+    footer_html_en: str = Field(max_length=20_000)
+    logo_data_url: str | None = None
+
+
 class SecurityCapabilities(PlatformModel):
     """宿主按运行模式公开的本地认证能力；前端仍须与权限取交集。"""
 

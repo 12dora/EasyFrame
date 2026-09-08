@@ -9,7 +9,7 @@ async function mockPlatform(page: Page) {
     if (path === "/api/v1/auth/oidc/status") return json({ enabled: false, authorizePath: "" });
     if (path === "/api/v1/auth/me") return json({ id: "u1", name: "Framework Admin", email: "admin@example.com", avatarUrl: null, hasLocalPassword: true, permissions: ["auth.totp.create", "auth.totp.advance", "auth.passkey.view", "auth.passkey.create", "identity.integration.view", "identity.integration.manage", "authz.integration.view", "authz.integration.manage", "ops.upstream_health.view", "ops.upstream_health.manage", "notification.center.view", "settings.app_setting.update"], securityCapabilities: { passwordChange: true, totpStatus: true, totpEnroll: true, totpDisable: true, passkeyList: true, passkeyRegister: true, passkeyDelete: true }, grants: [{ permissionCode: "authz.integration.view", dataScope: "ALL" }] });
     if (path === "/api/v1/notifications") return json({ items: [], unreadCount: 0, nextCursor: null });
-    if (path === "/api/v1/app-settings/footer") return json({ footerHtmlZh: "企业框架 · © {year}", footerHtmlEn: "Enterprise framework · © {year}" });
+    if (path === "/api/v1/app-settings/general") return json({ titleZh: "", titleEn: "", subtitleZh: "", subtitleEn: "", footerHtmlZh: "企业框架 · © {year}", footerHtmlEn: "Enterprise framework · © {year}", logoDataUrl: null });
     if (path === "/api/v1/users/me/totp/status") return json({ enabled: false });
     if (path === "/api/v1/users/me/passkeys") return json([]);
     if (path === "/api/v1/identity-integration/settings") return json({ enabled: false, issuer: "", authorizationEndpoint: "", tokenEndpoint: "", jwksUri: "", userinfoEndpoint: "", clientId: "", hasClientSecret: false, scopes: "openid profile email", redirectBaseUrl: "", redirectUri: "", frontendBaseUrl: "", serverBaseUrl: "", authentikApiBaseUrl: "", hasAuthentikApiToken: false, userSyncEnabled: false, userSyncIntervalMinutes: 30 });
@@ -31,7 +31,7 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
   test.beforeEach(async ({ page }) => { await mockPlatform(page); });
   test("shared shell and framework routes are reachable", async ({ page }) => {
     await page.goto(`/${locale}/app`); await expect(page.locator('[data-test-id="blank-workbench"]')).toBeVisible(); await expect(page.locator('[data-test-id="admin-topbar-actions"]')).toBeVisible(); await expect(page.locator("main")).toHaveCount(1);
-    for (const [path, marker] of [["security", "enterprise-security-settings"], ["access", "enterprise-access-settings"], ["upstream", "upstream-health-page"], ["footer", "app-settings-section"]] as const) { await page.goto(`/${locale}/app/settings/${path}`); await expect(page.locator(`[data-test-id="${marker}"]`)).toBeVisible(); }
+    for (const [path, marker] of [["security", "enterprise-security-settings"], ["access", "enterprise-access-settings"], ["upstream", "upstream-health-page"], ["general", "general-settings-page"]] as const) { await page.goto(`/${locale}/app/settings/${path}`); await expect(page.locator(`[data-test-id="${marker}"]`)).toBeVisible(); }
     let checkRequests = 0;
     await page.route("**/api/v1/ops/upstream-health/checks", async (route) => {
       checkRequests += 1;
@@ -115,7 +115,7 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
   });
   test("permission-gated blank routes return an explicit 403 surface", async ({ page }) => {
     await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "plain", name: "Plain user", hasLocalPassword: false, permissions: [] }) }));
-    for (const path of ["security", "access", "upstream", "footer"]) {
+    for (const path of ["security", "access", "upstream", "general"]) {
       await page.goto(`/${locale}/app/settings/${path}`);
       await expect(page.locator('[data-test-id="permission-denied"]')).toBeVisible();
       await expect(page.locator('[data-test-id="blank-auth-loading"]')).toHaveCount(0);

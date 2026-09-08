@@ -10,7 +10,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { enterpriseLogoutAdapter, logout } from "../lib/auth-adapter";
 import { localeOf, messages } from "../lib/messages";
 import { BLANK_AUTH_INVALIDATED_EVENT } from "../lib/platform-api";
-import { dismissAllNotifications, dismissNotification, loadFooterSettings, loadNotifications, loadShellIdentity, type ShellFooterSettings, type ShellIdentity } from "../lib/shell-adapter";
+import { dismissAllNotifications, dismissNotification, loadGeneralSettings, loadNotifications, loadShellIdentity, type ShellGeneralSettings, type ShellIdentity } from "../lib/shell-adapter";
 
 const BlankShellIdentityContext = createContext<ShellIdentity | null>(null);
 export function useBlankShellIdentity() { const identity = useContext(BlankShellIdentityContext); if (!identity) throw new Error("Blank shell identity is not available"); return identity; }
@@ -19,7 +19,7 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
   const locale = localeOf(rawLocale); const t = useMemo(() => messages(locale), [locale]); const pathname = usePathname(); const router = useRouter();
   const [panel, setPanel] = useState<string | null>(pathname.includes("/settings/") ? "settings" : null); const [identity, setIdentity] = useState<ShellIdentity | null>(null);
   const wasInSettings = useRef(pathname.includes("/settings/"));
-  const [footer, setFooter] = useState<ShellFooterSettings | null>(null);
+  const [settings, setSettings] = useState<ShellGeneralSettings | null>(null);
   const [notifications, setNotifications] = useState<EnterpriseNotification[]>([]); const [notificationsLoading, setNotificationsLoading] = useState(false); const [notificationsError, setNotificationsError] = useState(false);
   const refreshNotifications = useCallback(async () => { setNotificationsLoading(true); setNotificationsError(false); try { setNotifications(await loadNotifications()); } catch { setNotificationsError(true); } finally { setNotificationsLoading(false); } }, []);
   // 生产身份事实来自可信网关/Authentik 注入后由 `/auth/me` 验证；本地 JWT 只是
@@ -36,7 +36,7 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
   useEffect(() => { const inSettings = pathname.includes("/settings/"); if (inSettings && !wasInSettings.current) setPanel("settings"); if (!inSettings) setPanel(null); wasInSettings.current = inSettings; }, [pathname]);
   const canNotifications = Boolean(identity?.permissions.has("notification.center.view"));
   useEffect(() => { if (!canNotifications) return; const timer = window.setTimeout(() => void refreshNotifications(), 0); return () => window.clearTimeout(timer); }, [canNotifications, refreshNotifications]);
-  useEffect(() => { let active = true; const update = (event: Event) => setFooter((event as CustomEvent<ShellFooterSettings>).detail); loadFooterSettings().then((value) => { if (active) setFooter(value); }).catch(() => { if (active) setFooter(null); }); window.addEventListener("enterprise-starter:footer-updated", update); return () => { active = false; window.removeEventListener("enterprise-starter:footer-updated", update); }; }, []);
+  useEffect(() => { let active = true; const update = (event: Event) => setSettings((event as CustomEvent<ShellGeneralSettings>).detail); loadGeneralSettings().then((value) => { if (active) setSettings(value); }).catch(() => { if (active) setSettings(null); }); window.addEventListener("enterprise-starter:general-updated", update); return () => { active = false; window.removeEventListener("enterprise-starter:general-updated", update); }; }, []);
   const href = useCallback((path: string) => `/${locale}${path}`, [locale]); const active = useCallback((path: string) => pathname === href(path), [href, pathname]); const activePrefix = useCallback((path: string) => pathname === href(path) || pathname.startsWith(`${href(path)}/`), [href, pathname]);
   const canSecurity = Boolean(identity && Object.values(identity.securityCapabilities).some(Boolean));
   const model: NavModel = useMemo(() => {
@@ -44,21 +44,24 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
     const canAccess = permissions.has("identity.integration.view") || permissions.has("authz.integration.view");
     const canAccounts = permissions.has("accounts.local.view");
     const canUpstream = permissions.has("ops.upstream_health.view");
-    const canFooter = permissions.has("settings.app_setting.update");
+    const canGeneral = permissions.has("settings.app_setting.update");
     const settingsItems = [
       ...(canSecurity ? [{ key: "security", label: t.navigation.security, href: href("/app/settings/security"), active: activePrefix("/app/settings/security") }] : []),
       ...(canAccess ? [{ key: "access", label: t.navigation.access, href: href("/app/settings/access"), active: activePrefix("/app/settings/access") }] : []),
       ...(canAccounts ? [{ key: "accounts", label: t.navigation.accounts, href: href("/app/settings/accounts"), active: activePrefix("/app/settings/accounts") }] : []),
       ...(canUpstream ? [{ key: "upstream", label: t.navigation.upstream, href: href("/app/settings/upstream"), active: activePrefix("/app/settings/upstream") }] : []),
-      ...(canFooter ? [{ key: "footer", label: t.navigation.footer, href: href("/app/settings/footer"), active: activePrefix("/app/settings/footer") }] : []),
+      ...(canGeneral ? [{ key: "general", label: t.navigation.general, href: href("/app/settings/general"), active: activePrefix("/app/settings/general") }] : []),
     ];
     return { groups: [{ key: "main", nodes: [{ kind: "link", link: { key: "dashboard", label: t.navigation.dashboard, href: href("/app"), active: active("/app") } }] }, ...(settingsItems.length ? [{ key: "system", divider: true, nodes: [{ kind: "panel" as const, panel: { id: "settings", label: t.navigation.settings, active: pathname.includes("/settings/"), firstHref: settingsItems[0].href, items: settingsItems } }] }] : [])] };
   }, [active, activePrefix, canSecurity, href, identity, pathname, t]);
   const renderLink: RenderNavLink = ({ href: target, active: isActive, className, testId, onNavigate, children: label }) => <Link href={target} aria-current={isActive ? "page" : undefined} className={className} data-test-id={testId} onClick={onNavigate}>{label}</Link>;
   const openPanel = (next: NavPanel) => { setPanel(next.id); router.push(next.firstHref); };
   if (!identity) return <main className="mx-auto w-full max-w-6xl p-6" data-test-id="blank-auth-loading"><PageLoadingSkeleton/></main>;
-  const topbar = <Topbar brand={<Link href={href("/app")} className="min-w-0"><div className="truncate text-[16px] font-semibold text-ink">{t.brand}</div><p className="hidden text-[12px] text-ink-faint sm:block">{t.subtitle}</p></Link>} actions={<EnterpriseTopbarActions pathKey={pathname} locale={locale} localeOptions={[{ code: "zh-CN", label: "中文" }, { code: "en", label: "English" }]} onLocaleChange={(next) => router.replace(localizedLocation(pathname, locale, String(next)))} labels={t.shell} notifications={canNotifications ? { items: notifications, loading: notificationsLoading, error: notificationsError, viewAllHref: href("/app/notifications"), onOpen: () => void refreshNotifications(), onDismiss: async (id) => { setNotifications((current) => current.filter((item) => item.id !== id)); await dismissNotification(id).catch(() => void refreshNotifications()); }, onDismissAll: async () => { setNotifications([]); await dismissAllNotifications().catch(() => void refreshNotifications()); } } : undefined} user={identity ? { name: identity.name, identity: identity.identity, avatarUrl: identity.avatarUrl, permissionSummary: t.common.permissionCount(identity.permissions.size) } : undefined} securityHref={canSecurity ? href("/app/settings/security") : undefined} renderLink={({ href: target, className, testId, role, children: label }) => <Link href={target} className={className} data-test-id={testId} role={role}>{label}</Link>} onLogout={() => performEnterpriseLogout(enterpriseLogoutAdapter, () => router.replace(`/${locale}/logged-out`))}/>} />;
-  const footerHtml = locale === "en" ? footer?.footerHtmlEn : footer?.footerHtmlZh;
+  const topbar = <Topbar brand={
+    // EasyUI EnterpriseBrandSlot wiring: see docs/GENERAL_SETTINGS.md
+    <Link href={href("/app")} className="min-w-0"><div className="truncate text-[16px] font-semibold text-ink">{t.brand}</div><p className="hidden text-[12px] text-ink-faint sm:block">{t.subtitle}</p></Link>
+  } actions={<EnterpriseTopbarActions pathKey={pathname} locale={locale} localeOptions={[{ code: "zh-CN", label: "中文" }, { code: "en", label: "English" }]} onLocaleChange={(next) => router.replace(localizedLocation(pathname, locale, String(next)))} labels={t.shell} notifications={canNotifications ? { items: notifications, loading: notificationsLoading, error: notificationsError, viewAllHref: href("/app/notifications"), onOpen: () => void refreshNotifications(), onDismiss: async (id) => { setNotifications((current) => current.filter((item) => item.id !== id)); await dismissNotification(id).catch(() => void refreshNotifications()); }, onDismissAll: async () => { setNotifications([]); await dismissAllNotifications().catch(() => void refreshNotifications()); } } : undefined} user={identity ? { name: identity.name, identity: identity.identity, avatarUrl: identity.avatarUrl, permissionSummary: t.common.permissionCount(identity.permissions.size) } : undefined} securityHref={canSecurity ? href("/app/settings/security") : undefined} renderLink={({ href: target, className, testId, role, children: label }) => <Link href={target} className={className} data-test-id={testId} role={role}>{label}</Link>} onLogout={() => performEnterpriseLogout(enterpriseLogoutAdapter, () => router.replace(`/${locale}/logged-out`))}/>} />;
+  const footerHtml = locale === "en" ? settings?.footerHtmlEn : settings?.footerHtmlZh;
   const forcedTarget = `/${locale}/app/settings/security/password`;
   if (identity.mustChangePassword && pathname === forcedTarget) return <BlankShellIdentityContext.Provider value={identity}><EnterprisePublicShell topbar={topbar} footer={<EnterpriseConfiguredFooter html={footerHtml} fallback={<>{t.public.footer} · © {new Date().getFullYear()}</>}/>}>{children}</EnterprisePublicShell></BlankShellIdentityContext.Provider>;
   const openPanelId = pathname.includes("/settings/") ? panel : null;

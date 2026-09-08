@@ -63,7 +63,7 @@ def _client() -> tuple[TestClient, _FakeAuthorization]:
         create_platform_router(
             PlatformPorts(
                 account=None,
-                footer=None,
+                app_settings=None,
                 notifications=None,
                 integrations=_FakeIntegrations(),
                 directory=None,

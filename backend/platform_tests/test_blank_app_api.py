@@ -441,3 +441,17 @@ def test_login_ip_admission_rejects_before_creating_account_buckets(forwarded) -
         # 被 IP 准入拒绝的用户名不会新增账号条目。
         assert tracked_key_count() == keys_after_flood
         reset_rate_limits()
+
+
+def test_public_get_general_defaults_and_footer_shim() -> None:
+    from blank_app.main import app
+
+    with TestClient(app) as client:
+        general = client.get("/api/v1/app-settings/general")
+        footer = client.get("/api/v1/app-settings/footer")
+        assert general.status_code == 200
+        assert footer.status_code == 200
+        payload = general.json()
+        assert payload["footerHtmlEn"] == footer.json()["footerHtmlEn"] == "Enterprise App · © {year}"
+        assert payload["titleZh"] == payload["titleEn"] == ""
+        assert payload["logoDataUrl"] is None

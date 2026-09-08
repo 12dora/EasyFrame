@@ -27,7 +27,7 @@ from enterprise_platform.schemas import (
     DirectorySyncResult,
     EasyAuthSettingsUpdate,
     EasyAuthStatus,
-    FooterSettings,
+    GeneralSettings,
     IdentityDiscoveryResponse,
     MyGrantResponse,
     NotificationPage,
@@ -80,9 +80,9 @@ class AccountPort(Protocol):
     def delete_passkey(self, account_id: str, passkey_id: str) -> bool: ...
 
 
-class FooterPort(Protocol):
-    def get_footer(self) -> FooterSettings: ...
-    def save_footer(self, footer: FooterSettings, *, actor_id: str) -> FooterSettings: ...
+class AppSettingsPort(Protocol):
+    def get_general(self) -> GeneralSettings: ...
+    def save_general(self, settings: GeneralSettings, *, actor_id: str) -> GeneralSettings: ...
 
 
 class NotificationPort(Protocol):

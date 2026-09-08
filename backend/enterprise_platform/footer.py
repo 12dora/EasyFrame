@@ -1,5 +1,7 @@
-"""共享页脚 HTML 白名单清洗。"""
+"""共享页脚 HTML 白名单清洗、纯文本与标志 data URL 校验。"""
 
+import base64
+import binascii
 import html
 import re
 from html.parser import HTMLParser
@@ -11,6 +13,8 @@ FOOTER_SKIP_CONTENT_TAGS = {"script", "style", "iframe"}
 ALLOWED_LINK_SCHEMES = {"http", "https", "mailto"}
 ALLOWED_TARGETS = {"_blank", "_self", "_parent", "_top"}
 REL_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+MAX_LOGO_DECODED_BYTES = 128 * 1024
+_LOGO_DATA_URL = re.compile(r"^data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$")
 
 
 class FooterHtmlSanitizer(HTMLParser):
@@ -122,3 +126,54 @@ def sanitize_footer_html(value: str) -> str:
     parser.feed(value)
     parser.close()
     return parser.sanitized()
+
+
+def clean_plain_text(value: str, *, max_length: int) -> str:
+    text = value.strip()
+    if "<" in text or ">" in text:
+        raise ValueError("不能包含尖括号")
+    if len(text) > max_length:
+        raise ValueError("文本过长")
+    return text
+
+
+def validate_logo_data_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return _decode_logo_data_url(stripped)
+
+
+def _decode_logo_data_url(value: str) -> str:
+    match = _LOGO_DATA_URL.fullmatch(value)
+    if match is None:
+        raise ValueError("图片格式无效")
+    mime, encoded = match.group(1), match.group(2)
+    if len(encoded) > MAX_LOGO_DECODED_BYTES * 4 // 3 + 4:
+        raise ValueError("图片过大")
+    payload = _decode_logo_base64(encoded)
+    if len(payload) > MAX_LOGO_DECODED_BYTES:
+        raise ValueError("图片过大")
+    if _sniff_image_mime(payload) != mime:
+        raise ValueError("图片内容与声明类型不符")
+    return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
+
+
+def _decode_logo_base64(encoded: str) -> bytes:
+    padded = encoded + "=" * (-len(encoded) % 4)
+    try:
+        return base64.b64decode(padded, validate=True)
+    except binascii.Error as exc:
+        raise ValueError("图片格式无效") from exc
+
+
+def _sniff_image_mime(payload: bytes) -> str | None:
+    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if payload.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        return "image/webp"
+    return None

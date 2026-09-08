@@ -3,7 +3,7 @@
 物理实现:
 - ``adapter_support``: 密钥/签名/设置/审计/本地资格
 - ``adapter_account``: 账号端口、本地账户管理、权限投影
-- ``adapter_platform``: 页脚、通知、身份集成、上游健康
+- ``adapter_platform``: 通用设置、通知、身份集成、上游健康
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ from enterprise_platform.authz import (
     normalize_grants,
     normalize_local_grants,
 )
-from enterprise_platform.footer import sanitize_footer_html
+from enterprise_platform.footer import clean_plain_text, sanitize_footer_html, validate_logo_data_url
 from enterprise_platform.health import safe_health_summary
 from enterprise_platform.jwks import probe_jwks
 from enterprise_platform.local_accounts import (
@@ -81,6 +81,7 @@ from enterprise_platform.schemas import (
     EasyAuthSettingsUpdate,
     EasyAuthStatus,
     FooterSettings,
+    GeneralSettings,
     IdentityDiscoveryResponse,
     NotificationItem,
     NotificationPage,
@@ -150,9 +151,9 @@ account_adapter = adapter_account.account_adapter
 local_account_admin = adapter_account.local_account_admin
 require_permission = adapter_account.require_permission
 
-# 页脚/通知/集成/上游
+# 通用设置/通知/集成/上游
 BlankDirectoryAdapter = adapter_platform.BlankDirectoryAdapter
-BlankFooterAdapter = adapter_platform.BlankFooterAdapter
+BlankAppSettingsAdapter = adapter_platform.BlankAppSettingsAdapter
 BlankIntegrationAdapter = adapter_platform.BlankIntegrationAdapter
 BlankNotificationAdapter = adapter_platform.BlankNotificationAdapter
 BlankUpstreamHealthAdapter = adapter_platform.BlankUpstreamHealthAdapter
@@ -171,8 +172,8 @@ __all__ = [
     "AuthorizationSettingsUpdate",
     "BASELINE_SELF_SERVICE",
     "BlankAccountAdapter",
+    "BlankAppSettingsAdapter",
     "BlankDirectoryAdapter",
-    "BlankFooterAdapter",
     "BlankIntegrationAdapter",
     "BlankLocalAccountAdmin",
     "BlankLocalAccountUnitOfWork",
@@ -194,6 +195,7 @@ __all__ = [
     "EasyAuthStatus",
     "FRAMEWORK_PERMISSIONS",
     "FooterSettings",
+    "GeneralSettings",
     "HealthSnapshot",
     "IdentityDiscoveryResponse",
     "IntegrityError",
@@ -239,6 +241,7 @@ __all__ = [
     "authorize_security_operation",
     "base64",
     "classify_connection_failure",
+    "clean_plain_text",
     "create_trusted_authority_transport",
     "datetime",
     "decrypt_secret",
@@ -285,6 +288,7 @@ __all__ = [
     "timedelta",
     "update",
     "uuid",
+    "validate_logo_data_url",
     "validate_signing_secrets",
     "verification_keys",
 ]

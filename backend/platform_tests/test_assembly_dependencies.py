@@ -26,7 +26,7 @@ def _app_with_unhashable_adapter() -> FastAPI:
         create_platform_router(
             PlatformPorts(
                 account=_MutableAccountPort(),
-                footer=None,
+                app_settings=None,
                 notifications=None,
                 integrations=None,
                 directory=None,
@@ -53,3 +53,33 @@ def test_default_user_and_permission_dependencies_tolerate_unhashable_adapters()
     response = client.get("/api/v1/auth/me")
     assert response.status_code == 200, response.text
     assert response.json()["name"] == "alice"
+
+
+def test_app_settings_route_group_flag_unregisters_general_and_footer() -> None:
+    app = FastAPI()
+    app.include_router(
+        create_platform_router(
+            PlatformPorts(
+                account=_MutableAccountPort(),
+                app_settings=None,
+                notifications=None,
+                integrations=None,
+                directory=None,
+                upstream_health=None,
+                require_permission=lambda _code: None,
+            ),
+            include_authz_integration=False,
+            route_groups=PlatformRouteGroups(
+                passkeys=False,
+                app_settings=False,
+                notifications=False,
+                identity=False,
+                easyauth=False,
+                upstream=False,
+            ),
+        ),
+        prefix="/api/v1",
+    )
+    client = TestClient(app)
+    assert client.get("/api/v1/app-settings/general").status_code == 404
+    assert client.get("/api/v1/app-settings/footer").status_code == 404

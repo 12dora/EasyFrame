@@ -10,9 +10,9 @@ from fastapi import Request
 
 from enterprise_platform.ports import (
     AccountPort,
+    AppSettingsPort,
     AuthorizationOperationsPort,
     DirectoryPort,
-    FooterPort,
     IntegrationPort,
     NotificationPort,
     PermissionCheck,
@@ -37,7 +37,7 @@ NOTIFICATION_CENTER_VIEW = "notification.center.view"
 @dataclass(frozen=True)
 class PlatformPorts:
     account: AccountPort
-    footer: FooterPort
+    app_settings: AppSettingsPort
     notifications: NotificationPort
     integrations: IntegrationPort
     directory: DirectoryPort
@@ -93,7 +93,9 @@ class PlatformRouteGroups:
     password: bool = True
     totp: bool = True
     passkeys: bool = True
-    footer: bool = True
+    # 规范开关为 app_settings;footer 为兼容别名,None 时跟随 app_settings。
+    app_settings: bool = True
+    footer: bool | None = None
     notifications: bool = True
     identity: bool = True
     easyauth: bool = True

@@ -1,4 +1,4 @@
-"""blank host 页脚、通知、身份集成与上游健康适配。"""
+"""blank host 通用设置、通知、身份集成与上游健康适配。"""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from enterprise_platform.schemas import (
     EasyAuthSettingsUpdate,
     EasyAuthStatus,
     FooterSettings,
+    GeneralSettings,
     IdentityDiscoveryResponse,
     NotificationPage,
     OidcSettings,
@@ -35,32 +36,60 @@ def _facade():
 _DISCOVERY_REQUIRED_ENDPOINTS = ("authorization_endpoint", "token_endpoint", "jwks_uri")
 
 
-class BlankFooterAdapter:
-    def get_footer(self) -> FooterSettings:
-        with _facade().SessionLocal() as db:
-            row = db.get(_facade().PlatformSetting, "footer")
-            if row is None:
-                return _facade().FooterSettings(
-                    footer_html_zh="企业应用 · © {year}", footer_html_en="Enterprise App · © {year}"
-                )
-            return _facade().FooterSettings.model_validate(row.value)
+_GENERAL_KEY = "general"
+_LEGACY_FOOTER_KEY = "footer"
+_DEFAULT_FOOTER_HTML_ZH = "企业应用 · © {year}"
+_DEFAULT_FOOTER_HTML_EN = "Enterprise App · © {year}"
+_GENERAL_AUDIT_ACTION = "settings.footer.update"
 
-    def save_footer(self, footer: FooterSettings, *, actor_id: str) -> FooterSettings:
-        safe = _facade().FooterSettings(
-            footer_html_zh=_facade().sanitize_footer_html(footer.footer_html_zh),
-            footer_html_en=_facade().sanitize_footer_html(footer.footer_html_en),
-        )
+
+def _blank_general(*, footer_html_zh: str, footer_html_en: str) -> GeneralSettings:
+    return GeneralSettings(
+        title_zh="",
+        title_en="",
+        subtitle_zh="",
+        subtitle_en="",
+        footer_html_zh=footer_html_zh,
+        footer_html_en=footer_html_en,
+        logo_data_url=None,
+    )
+
+
+def _sanitize_general(settings: GeneralSettings) -> GeneralSettings:
+    return settings.model_copy(
+        update={
+            "footer_html_zh": _facade().sanitize_footer_html(settings.footer_html_zh),
+            "footer_html_en": _facade().sanitize_footer_html(settings.footer_html_en),
+        }
+    )
+
+
+class BlankAppSettingsAdapter:
+    def get_general(self) -> GeneralSettings:
         with _facade().SessionLocal() as db:
-            row = db.get(_facade().PlatformSetting, "footer") or _facade().PlatformSetting(key="footer")
+            row = db.get(_facade().PlatformSetting, _GENERAL_KEY)
+            if row is not None:
+                return GeneralSettings.model_validate(row.value)
+            footer_row = db.get(_facade().PlatformSetting, _LEGACY_FOOTER_KEY)
+            if footer_row is not None:
+                footer = FooterSettings.model_validate(footer_row.value)
+                return _blank_general(footer_html_zh=footer.footer_html_zh, footer_html_en=footer.footer_html_en)
+            return _blank_general(footer_html_zh=_DEFAULT_FOOTER_HTML_ZH, footer_html_en=_DEFAULT_FOOTER_HTML_EN)
+
+    def save_general(self, settings: GeneralSettings, *, actor_id: str) -> GeneralSettings:
+        safe = _sanitize_general(settings)
+        payload = safe.model_dump(mode="json")
+        with _facade().SessionLocal() as db:
+            row = db.get(_facade().PlatformSetting, _GENERAL_KEY) or _facade().PlatformSetting(key=_GENERAL_KEY)
             before = dict(row.value) if row.value else None
-            row.value = safe.model_dump(mode="json")
+            row.value = payload
             db.add(row)
             db.add(
                 _facade().PlatformAuditLog(
                     actor_id=actor_id,
-                    action="settings.footer.update",
+                    action=_GENERAL_AUDIT_ACTION,
                     before_data=before,
-                    after_data=safe.model_dump(mode="json"),
+                    after_data=payload,
                 )
             )
             db.commit()

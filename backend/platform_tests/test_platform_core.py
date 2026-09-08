@@ -315,7 +315,7 @@ def _quota_probe_app(port: SlowCredentialPort) -> FastAPI:
         create_platform_router(
             PlatformPorts(
                 account=port,
-                footer=None,
+                app_settings=None,
                 notifications=None,
                 integrations=None,
                 directory=None,

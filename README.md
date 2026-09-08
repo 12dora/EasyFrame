@@ -64,6 +64,7 @@ make blank-e2e                         # = pnpm --dir frontend blank:e2e(Playwri
 
 - [docs/LOCAL_ACCOUNTS.md](docs/LOCAL_ACCOUNTS.md) — 本地账户管理(超管建号、权限授予、2FA 救援)的接口与行为契约
 - [docs/EASYAUTH_EVENTS.md](docs/EASYAUTH_EVENTS.md) — EasyAuth 授权变更 webhook、快照拉取规则与宿主镜像清单
+- [docs/GENERAL_SETTINGS.md](docs/GENERAL_SETTINGS.md) — 通用设置（名称/副标题/页脚/标志）线合同、页脚 shim 与宿主镜像清单
 
 ## 许可
 
