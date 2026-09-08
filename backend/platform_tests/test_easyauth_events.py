@@ -13,14 +13,20 @@ from fastapi.testclient import TestClient
 
 from enterprise_platform.assembly import PlatformPorts, PlatformRouteGroups, create_platform_router
 from enterprise_platform.easyauth.webhook import CATALOG_CHANGED_EVENT, GRANT_CHANGED_EVENT, WEBHOOK_TEST_EVENT
-from enterprise_platform.schemas import CurrentUser
+from enterprise_platform.schemas import CurrentUser, EasyAuthStatus
 
 SECRET = "whsec_endpoint"
 
 
 class _FakeIntegrations:
+    def __init__(self, app_key: str = "enterprise-blank") -> None:
+        self.app_key = app_key
+
     def get_easyauth_webhook_secret(self) -> str:
         return SECRET
+
+    def get_easyauth_status(self) -> EasyAuthStatus:
+        return EasyAuthStatus(app_key=self.app_key)
 
 
 class _FakeAuthorization:
@@ -31,8 +37,8 @@ class _FakeAuthorization:
     def refresh_snapshot_for_external_user(self, external_user_id: str, expected_snapshot_version: str) -> None:
         self.refreshed.append((external_user_id, expected_snapshot_version))
 
-    def invalidate_app_snapshots(self, app_key: str) -> None:
-        self.invalidated.append(app_key)
+    def invalidate_app_snapshots(self, app_key: str, catalog_version: int) -> None:
+        self.invalidated.append((app_key, catalog_version))
 
 
 def _signed(body: bytes, *, event: str, timestamp: int | None = None) -> dict[str, str]:
@@ -118,7 +124,7 @@ def test_catalog_changed_invalidates_app() -> None:
     body = _payload(CATALOG_CHANGED_EVENT, app_key="enterprise-blank", catalog_version=9)
     response = client.post("/api/v1/easyauth/events", content=body, headers=_signed(body, event=CATALOG_CHANGED_EVENT))
     assert response.status_code == 200, response.text
-    assert authz.invalidated == ["enterprise-blank"]
+    assert authz.invalidated == [("enterprise-blank", 9)]
 
 
 def test_unknown_event_is_unsupported() -> None:
@@ -127,6 +133,75 @@ def test_unknown_event_is_unsupported() -> None:
     response = client.post("/api/v1/easyauth/events", content=body, headers=_signed(body, event="approval.completed"))
     assert response.status_code == 422
     assert response.json() == {"error": "unsupported_event"}
+
+
+def test_wrong_app_key_is_unprocessable() -> None:
+    client, authz = _client()
+    body = _payload(
+        GRANT_CHANGED_EVENT,
+        app_key="other-app",
+        user_id="ak-user-1",
+        snapshot_version="4.2",
+    )
+    response = client.post("/api/v1/easyauth/events", content=body, headers=_signed(body, event=GRANT_CHANGED_EVENT))
+    assert response.status_code == 422
+    assert response.json() == {"error": "app_key_mismatch"}
+    assert authz.refreshed == []
+    assert authz.invalidated == []
+
+
+def test_missing_app_key_is_unprocessable() -> None:
+    client, authz = _client()
+    body = _payload(GRANT_CHANGED_EVENT, user_id="ak-user-1", snapshot_version="4.2")
+    response = client.post("/api/v1/easyauth/events", content=body, headers=_signed(body, event=GRANT_CHANGED_EVENT))
+    assert response.status_code == 422
+    assert response.json() == {"error": "invalid_payload"}
+    assert authz.refreshed == []
+
+
+def test_malformed_timestamp_is_unauthorized() -> None:
+    client, authz = _client()
+    body = _payload(WEBHOOK_TEST_EVENT)
+    headers = _signed(body, event=WEBHOOK_TEST_EVENT)
+    headers["X-EasyAuth-Timestamp"] = "9" * 32
+    response = client.post("/api/v1/easyauth/events", content=body, headers=headers)
+    assert response.status_code == 401
+    assert response.json() == {"error": "invalid_signature"}
+    assert authz.refreshed == []
+
+
+def test_non_ascii_signature_is_unauthorized() -> None:
+    client, authz = _client()
+    body = _payload(WEBHOOK_TEST_EVENT)
+    headers = _signed(body, event=WEBHOOK_TEST_EVENT)
+    headers["X-EasyAuth-Signature"] = b"\xdf" * 64
+    response = client.post("/api/v1/easyauth/events", content=body, headers=headers)
+    assert response.status_code == 401
+    assert response.json() == {"error": "invalid_signature"}
+    assert authz.refreshed == []
+
+
+def test_dispatch_runs_in_threadpool(monkeypatch) -> None:
+    import enterprise_platform.assembly.easyauth_event_routes as routes
+
+    seen: list[object] = []
+
+    async def fake_threadpool(func, *args, **kwargs):
+        seen.append(func)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "run_in_threadpool", fake_threadpool)
+    client, authz = _client()
+    body = _payload(
+        GRANT_CHANGED_EVENT,
+        app_key="enterprise-blank",
+        user_id="ak-user-1",
+        snapshot_version="4.2",
+    )
+    response = client.post("/api/v1/easyauth/events", content=body, headers=_signed(body, event=GRANT_CHANGED_EVENT))
+    assert response.status_code == 200, response.text
+    assert seen
+    assert authz.refreshed == [("ak-user-1", "4.2")]
 
 
 def test_bad_signature_is_unauthorized() -> None:
