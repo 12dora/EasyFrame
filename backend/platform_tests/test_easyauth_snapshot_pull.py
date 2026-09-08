@@ -333,4 +333,3 @@ def test_webhook_secret_is_encrypted_like_credential() -> None:
             .first()
         )
         assert audit.after_data["webhook_secret"] == "[configured]"
-
