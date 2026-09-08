@@ -18,15 +18,15 @@ import { platformRequest as request } from "./platform-api";
 export interface BlankOidcSettings extends EnterpriseIdentityIntegrationSettings {
   authorizationEndpoint: string; tokenEndpoint: string; jwksUri: string; userinfoEndpoint: string;
   scopes: string; redirectBaseUrl: string; frontendBaseUrl: string; serverBaseUrl: string;
-  userSyncIntervalMinutes: number;
 }
 export interface BlankOidcSettingsUpdate {
   enabled: boolean; issuer: string; authorizationEndpoint: string; tokenEndpoint: string; jwksUri: string; userinfoEndpoint: string;
   clientId: string; clientSecret?: string; scopes: string; redirectBaseUrl: string; frontendBaseUrl: string; serverBaseUrl: string;
-  authentikApiBaseUrl: string; authentikApiToken?: string; userSyncEnabled: boolean; userSyncIntervalMinutes: number;
 }
-export interface BlankEasyAuthSettings { configured: boolean; baseUrl: string; appKey: string; authMode: string; hasCredential: boolean; permissionRequestUrl: string; }
-export interface BlankEasyAuthSettingsUpdate { baseUrl: string; appKey: string; credential?: string; permissionRequestUrl: string; }
+/** Read model: both secrets are write-only, the server only reports whether one is stored. */
+export interface BlankEasyAuthSettings { configured: boolean; baseUrl: string; appKey: string; authMode: string; hasCredential: boolean; hasWebhookSecret: boolean; permissionRequestUrl: string; }
+/** Update model: an omitted secret keeps the stored value, `""` clears it (backend `credential` / `webhook_secret`). */
+export interface BlankEasyAuthSettingsUpdate { baseUrl: string; appKey: string; credential?: string; webhookSecret?: string; permissionRequestUrl: string; }
 
 export const authorizationAdapter: EnterpriseAccessSettingsAdapter = {
   easyAuthConnectionEditable: true,
@@ -38,12 +38,11 @@ export const authorizationAdapter: EnterpriseAccessSettingsAdapter = {
   refreshSnapshot: (userId) => request<EnterprisePermissionSnapshot>(`/api/v1/authz-integration/snapshots/${encodeURIComponent(userId)}/refresh`, { method: "POST", body: "{}" }),
   loadManifest: async () => normalizeEnterpriseManifest(await request<EnterpriseManifestOverview>("/api/v1/authz-integration/manifest")),
   loadOidcSettings,
-  saveOidcSettings: (value, secrets) => saveOidcSettings({ enabled: value.enabled, issuer: value.issuer, authorizationEndpoint: value.authorizationEndpoint, tokenEndpoint: value.tokenEndpoint, jwksUri: value.jwksUri, userinfoEndpoint: value.userinfoEndpoint, clientId: value.clientId, ...(secrets.clientSecret !== undefined ? { clientSecret: secrets.clientSecret } : {}), scopes: value.scopes, redirectBaseUrl: value.redirectBaseUrl, frontendBaseUrl: value.frontendBaseUrl, serverBaseUrl: value.serverBaseUrl, authentikApiBaseUrl: value.authentikApiBaseUrl, ...(secrets.authentikApiToken !== undefined ? { authentikApiToken: secrets.authentikApiToken } : {}), userSyncEnabled: value.userSyncEnabled, userSyncIntervalMinutes: value.userSyncIntervalMinutes }),
+  saveOidcSettings: (value, secrets) => saveOidcSettings({ enabled: value.enabled, issuer: value.issuer, authorizationEndpoint: value.authorizationEndpoint, tokenEndpoint: value.tokenEndpoint, jwksUri: value.jwksUri, userinfoEndpoint: value.userinfoEndpoint, clientId: value.clientId, ...(secrets.clientSecret !== undefined ? { clientSecret: secrets.clientSecret } : {}), scopes: value.scopes, redirectBaseUrl: value.redirectBaseUrl, frontendBaseUrl: value.frontendBaseUrl, serverBaseUrl: value.serverBaseUrl }),
   loadEasyAuthSettings,
-  saveEasyAuthSettings: (value, credential) => saveEasyAuthSettings({ baseUrl: value.baseUrl, appKey: value.appKey, ...(credential !== undefined ? { credential } : {}), permissionRequestUrl: value.permissionRequestUrl }),
+  saveEasyAuthSettings: (value, secrets) => saveEasyAuthSettings({ baseUrl: value.baseUrl, appKey: value.appKey, ...(secrets.credential !== undefined ? { credential: secrets.credential } : {}), ...(secrets.webhookSecret !== undefined ? { webhookSecret: secrets.webhookSecret } : {}), permissionRequestUrl: value.permissionRequestUrl }),
   testIdentityConnection: async () => { const result = await request<{ ok: boolean; latencyMs: number; errorDetail?: string | null }>("/api/v1/identity-integration/connection-test", { method: "POST", body: "{}" }); return result; },
   discoverIdentity: (issuer) => request<EnterpriseIdentityDiscoveryResult>("/api/v1/identity-integration/discover", { method: "POST", body: JSON.stringify({ issuer: issuer.trim() || null }) }),
-  syncIdentityUsers: async () => { const result = await request<{ status: string; summary: string }>("/api/v1/identity-integration/user-sync", { method: "POST", body: "{}" }); return { ok: result.status === "completed", summary: result.summary, ...(result.status === "completed" ? {} : { errorDetail: result.summary }) }; },
   loadMyGrants: async () => (await request<Array<{ permission: string; dataScope: EnterpriseCurrentGrant["dataScope"]; source?: string | null }>>("/api/v1/authz-integration/my-grants")).map((grant) => ({ permissionCode: grant.permission, dataScope: grant.dataScope, source: grant.source })),
   loadDescriptorKeys: () => request<EnterpriseDescriptorKey[]>("/api/v1/authz-integration/descriptor-keys"),
   createDescriptorKey: (name) => request("/api/v1/authz-integration/descriptor-keys", { method: "POST", body: JSON.stringify({ name }) }),

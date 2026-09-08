@@ -18,8 +18,8 @@ async function mockPlatform(page: Page, general: Record<string, unknown> = defau
     if (path === "/api/v1/notifications") return json({ items: [], unreadCount: 0, nextCursor: null });
     if (path === "/api/v1/users/me/totp/status") return json({ enabled: false });
     if (path === "/api/v1/users/me/passkeys") return json([]);
-    if (path === "/api/v1/identity-integration/settings") return json({ enabled: false, issuer: "", authorizationEndpoint: "", tokenEndpoint: "", jwksUri: "", userinfoEndpoint: "", clientId: "", hasClientSecret: false, scopes: "openid profile email", redirectBaseUrl: "", redirectUri: "", frontendBaseUrl: "", serverBaseUrl: "", authentikApiBaseUrl: "", hasAuthentikApiToken: false, userSyncEnabled: false, userSyncIntervalMinutes: 30 });
-    if (path === "/api/v1/authz-integration/settings") return json({ configured: false, baseUrl: "", appKey: "enterprise-blank", authMode: "static_app_token", hasCredential: false, permissionRequestUrl: "" });
+    if (path === "/api/v1/identity-integration/settings") return json({ enabled: false, issuer: "", authorizationEndpoint: "", tokenEndpoint: "", jwksUri: "", userinfoEndpoint: "", clientId: "", hasClientSecret: false, scopes: "openid profile email", redirectBaseUrl: "", redirectUri: "", frontendBaseUrl: "", serverBaseUrl: "" });
+    if (path === "/api/v1/authz-integration/settings") return json({ configured: false, baseUrl: "", appKey: "enterprise-blank", authMode: "static_app_token", hasCredential: false, hasWebhookSecret: false, permissionRequestUrl: "" });
     if (path === "/api/v1/authz-integration/status") return json({ easyauth: { configured: false, baseUrl: "", appKey: "enterprise-blank", authMode: "static_app_token", hasCredential: false, timeoutSeconds: 5 }, principal: { mode: "disabled", headerName: "", issuer: null, audience: null }, catalog: { activeCount: 0, totalCount: 0 }, snapshots: { total: 0, expired: 0, latestFetchedAt: null } });
     if (path === "/api/v1/authz-integration/permission-catalog" || path === "/api/v1/authz-integration/snapshots") return json([]);
     if (path === "/api/v1/authz-integration/my-grants") return json([{ permission: "authz.integration.view", dataScope: "ALL", source: "easyauth" }]);
@@ -143,6 +143,11 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
       await expect(page.locator('[data-test-id="permission-denied"]')).toBeVisible();
       await expect(page.locator('[data-test-id="blank-auth-loading"]')).toHaveCount(0);
     }
+    // 被拒的「通用」页仍然是那一页：标题照常渲染，且全页只有一个 H1。
+    await page.goto(`/${locale}/app/settings/general`);
+    await expect(page.locator('[data-test-id="general-settings-page"]')).toBeVisible();
+    await expect(page.locator("main h1")).toHaveCount(1);
+    await expect(page.locator("main h1")).toHaveText(locale === "en" ? "General" : "通用");
     await page.goto(`/${locale}/app/notifications`);
     await expect(page.locator('[data-test-id="permission-denied"]')).toBeVisible();
   });

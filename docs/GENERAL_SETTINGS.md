@@ -55,7 +55,7 @@ EasyTrade 非镜像路径：`app/api/v1/app_settings.py` + `app_settings` 表，
 前端模板（`frontend/apps/blank`，学习站按此复制）：
 
 - `lib/shell-adapter.ts` — `loadGeneralSettings()` / `saveGeneralSettings()` → `GET` / `PUT /api/v1/app-settings/general`；`ShellGeneralSettings` 直接取包内 `EnterpriseGeneralSettingsValue`，两边不再各写一份字段。
-- 设置页路由 `app/[locale]/app/settings/general`（原 `settings/footer` 已删除），页面只挂 `EnterpriseGeneralSettingsSurface` 并做 `settings.app_setting.update` 权限判定。
+- 设置页路由 `app/[locale]/app/settings/general`（原 `settings/footer` 已删除），页面只挂 `EnterpriseGeneralSettingsSurface` 并做 `settings.app_setting.update` 权限判定。无该权限时不再只渲染一条 `InlineNotice`，而是渲染 `EnterprisePermissionDeniedPage`（`title` = `navigation.general`、`description` = `generalSettings.description`、`message` = `common.permissionDenied`，`testId="general-settings-page"`、`surface="general-settings"`）：被拒的页仍然是那一页，标题留在门禁之外，整页始终只有一个 H1；提示本身仍是 `data-test-id="permission-denied"` 的错误 `InlineNotice`。
 - 保存后事件由 surface 自己经 `primeEnterpriseGeneralSettings` 广播 `enterprise-starter:general-updated`（原 `footer-updated` 已退役），宿主**不要**再手写一次 `dispatchEvent`。
 - 顶栏品牌槽：登录前后两个壳（`components/blank-public-shell.tsx`、`components/blank-shell.tsx`）都用 `useEnterpriseGeneralSettings(loadGeneralSettings)` 取共享缓存，再用 `resolveEnterpriseBrand(settings, locale, fallback)` 算出名称/副标题/标志交给 `EnterpriseBrandSlot`（`renderLink` 传 Next `Link`）。宿主兜底 = i18n 应用名 + `subtitle: null` + `assets/brand/jiefa_logo.webp` 的静态导入；副标题只在后台配置过时才出现。测试标识：应用内 `app-brand`，公开页 `public-brand`。
 - 页脚：两个壳都用 `resolveEnterpriseFooterHtml(settings, locale)` 喂 `EnterpriseConfiguredFooter`。登录后的框架用 `EnterpriseAppFrame`（`footer` 为必填的 `AppShell`），页脚不会再因为漏传而消失。
@@ -64,4 +64,4 @@ EasyTrade 非镜像路径：`app/api/v1/app_settings.py` + `app_settings` 表，
 - 身份标签：`loadShellIdentity(fallbackName, identityLabels)` 用 `resolveEnterpriseIdentityLabel` 得到顶栏用户菜单里的 `identity` 与 `identityKind`（超管 → 管理员；有授权组 → 组名；仅有权限 → 用户；否则游客）。文案取共享目录的 `identity`，分隔符取 `access.authorization.roleGroupSeparator`。
 - 文案：`navigation.general` 与 `generalSettings` 都由 `createEnterpriseLabelCatalog` 提供，宿主 `lib/messages.ts` 只补自有条目（如 `navigation.accounts`），不要复制整份目录。
 
-EasyUI 导出名（包 `@easy-enterprise/ui/enterprise`）：`EnterpriseGeneralSettingsSurface`、`EnterpriseGeneralSettingsValue`、`EnterpriseGeneralSettingsAdapter`、`EnterpriseGeneralSettingsLabels`、`EnterpriseBrandSlot`、`useEnterpriseGeneralSettings`、`primeEnterpriseGeneralSettings`、`resolveEnterpriseBrand`、`resolveEnterpriseFooterHtml`。`EnterpriseFooterSettingsSurface` 已删除。导航文案键为 `navigation.general`（通用 / General）。
+EasyUI 导出名（包 `@easy-enterprise/ui/enterprise`）：`EnterprisePermissionDeniedPage`、`EnterpriseGeneralSettingsSurface`、`EnterpriseGeneralSettingsValue`、`EnterpriseGeneralSettingsAdapter`、`EnterpriseGeneralSettingsLabels`、`EnterpriseBrandSlot`、`useEnterpriseGeneralSettings`、`primeEnterpriseGeneralSettings`、`resolveEnterpriseBrand`、`resolveEnterpriseFooterHtml`。`EnterpriseFooterSettingsSurface` 已删除。导航文案键为 `navigation.general`（通用 / General）。
