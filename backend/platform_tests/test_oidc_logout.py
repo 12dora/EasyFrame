@@ -60,16 +60,21 @@ def logout_setup(request):
     oidc._jwks_cache.pop(config.jwks_uri, None)
 
 
-def test_logout_calls_minimal_host_and_accepts_repeated_token(logout_setup, caplog):
+def test_logout_calls_minimal_host_and_accepts_repeated_token(logout_setup, monkeypatch):
     client, host, claims, sign = logout_setup
-    with caplog.at_level("INFO", logger="enterprise_platform.oidc_logout"):
-        for _ in range(2):
-            response = client.post("/api/v1/auth/oidc/backchannel-logout", data={"logout_token": sign(claims)})
-            assert response.status_code == 200
-            assert response.json() == {}
-            assert response.headers["cache-control"] == "no-store"
+    logged: list[str] = []
+
+    def capture_info(message, *args, **_kwargs):
+        logged.append(message % args if args else str(message))
+
+    monkeypatch.setattr("enterprise_platform.oidc_logout._LOG.info", capture_info)
+    for _ in range(2):
+        response = client.post("/api/v1/auth/oidc/backchannel-logout", data={"logout_token": sign(claims)})
+        assert response.status_code == 200
+        assert response.json() == {}
+        assert response.headers["cache-control"] == "no-store"
     assert host.revoked_subjects == [claims["sub"], claims["sub"]]
-    assert "revoked_accounts=0" in caplog.text
+    assert any("revoked_accounts=0" in line for line in logged)
     assert client.get("/api/v1/auth/oidc/backchannel-logout").status_code == 405
 
 

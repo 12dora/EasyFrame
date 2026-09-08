@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pydantic import Field
 from sqlalchemy import tuple_
@@ -19,6 +20,14 @@ from enterprise_platform.authz import (
 from enterprise_platform.schemas import PlatformModel
 
 logger = logging.getLogger(__name__)
+
+CATALOG_FLOOR_SETTING_KEY = "easyauth_catalog_floor"
+SNAPSHOT_PULL_BACKOFF = timedelta(seconds=30)
+_PULL_LOCK_COUNT = 64
+_PULL_LOCKS = tuple(threading.Lock() for _ in range(_PULL_LOCK_COUNT))
+_MAX_FAILURE_CACHE = 1024
+_failed_pulls: dict[str, datetime] = {}
+_failed_lock = threading.Lock()
 
 
 def _facade():
@@ -115,29 +124,47 @@ def ensure_account_snapshot(account_id: str | uuid.UUID, *, force: bool = False)
     """登录可 force 拉取;失败保留最后成功行。无缓存且失败则零权限。"""
 
     parsed_id = _facade().uuid.UUID(str(account_id))
-    has_row, fresh = _load_snapshot_cache(parsed_id)
-    if has_row is None:
+    cached = _load_snapshot_cache(parsed_id)
+    if cached is None:
         return False
+    has_row, fresh, pull_key = cached
     if fresh and not force:
         return True
+    if not force and _in_failure_backoff(pull_key):
+        return has_row
+    with _lock_for(pull_key):
+        return _refresh_under_lock(parsed_id, force=force, pull_key=pull_key)
+
+
+def _refresh_under_lock(account_id: uuid.UUID, *, force: bool, pull_key: str) -> bool:
+    cached = _load_snapshot_cache(account_id)
+    if cached is None:
+        return False
+    has_row, fresh, _ = cached
+    if fresh and not force:
+        return True
+    if not force and _in_failure_backoff(pull_key):
+        return has_row
     try:
-        _facade().refresh_account_snapshot(parsed_id)
+        _facade().refresh_account_snapshot(account_id)
     except _facade().HTTPException:
+        _remember_pull_failure(pull_key)
         if has_row:
             logger.warning("easyauth snapshot refresh failed; keeping last good row")
             return True
         return False
+    _clear_pull_failure(pull_key)
     return True
 
 
-def _load_snapshot_cache(account_id: uuid.UUID) -> tuple[bool | None, bool]:
-    """无外部身份返回 (None, False);否则 (是否已有行, 行是否未过期)。"""
+def _load_snapshot_cache(account_id: uuid.UUID) -> tuple[bool, bool, str] | None:
+    """无外部身份返回 None;否则 (是否已有行, 行是否未过期, 拉取协调键)。"""
 
     now = _facade().datetime.now(_facade().UTC)
     with _facade().SessionLocal() as db:
         account = db.get(_facade().Account, account_id)
         if account is None or not account.external_source or not account.external_user_id:
-            return None, False
+            return None
         setting = db.get(_facade().PlatformSetting, "easyauth")
         app_key = str((setting.value if setting else {}).get("app_key") or "")
         cached = (
@@ -149,9 +176,42 @@ def _load_snapshot_cache(account_id: uuid.UUID) -> tuple[bool | None, bool]:
             )
             .one_or_none()
         )
+        pull_key = f"{app_key}:{account.external_user_id}"
         if cached is None:
-            return False, False
-        return True, _facade()._utc(cached.expires_at) > now
+            return False, False, pull_key
+        return True, _facade()._utc(cached.expires_at) > now, pull_key
+
+
+def _lock_for(pull_key: str) -> threading.Lock:
+    return _PULL_LOCKS[hash(pull_key) % _PULL_LOCK_COUNT]
+
+
+def _in_failure_backoff(pull_key: str) -> bool:
+    now = _facade().datetime.now(_facade().UTC)
+    with _failed_lock:
+        _prune_failed_pulls(now)
+        failed_at = _failed_pulls.get(pull_key)
+        return failed_at is not None and now - failed_at < SNAPSHOT_PULL_BACKOFF
+
+
+def _remember_pull_failure(pull_key: str) -> None:
+    now = _facade().datetime.now(_facade().UTC)
+    with _failed_lock:
+        _prune_failed_pulls(now)
+        _failed_pulls[pull_key] = now
+
+
+def _clear_pull_failure(pull_key: str) -> None:
+    with _failed_lock:
+        _failed_pulls.pop(pull_key, None)
+
+
+def _prune_failed_pulls(now: datetime) -> None:
+    expired = [key for key, failed_at in _failed_pulls.items() if now - failed_at >= SNAPSHOT_PULL_BACKOFF]
+    for key in expired:
+        del _failed_pulls[key]
+    while len(_failed_pulls) >= _MAX_FAILURE_CACHE:
+        _failed_pulls.pop(next(iter(_failed_pulls)))
 
 
 def refresh_account_snapshot(user_id: uuid.UUID) -> SnapshotResponse:
@@ -240,6 +300,7 @@ def _commit_snapshot_row(
 ) -> PermissionSnapshot:
     """原子提交 snapshot；较旧 (grant_version, catalog_version) 不能覆盖较新结果。"""
 
+    _reject_below_catalog_floor(db, app_key, values["catalog_version"])
     insert_values = {
         "id": row.id or _facade().uuid.uuid4(),
         "external_source": external_source,
@@ -268,7 +329,7 @@ def _commit_snapshot_row(
     )
     db.execute(statement)
     db.commit()
-    row = (
+    return (
         db.query(_facade().PermissionSnapshot)
         .filter(
             _facade().PermissionSnapshot.external_source == external_source,
@@ -277,8 +338,6 @@ def _commit_snapshot_row(
         )
         .one()
     )
-    db.refresh(row)
-    return row
 
 
 def _newer_or_equal_snapshot(statement):
@@ -354,16 +413,46 @@ def refresh_snapshot_for_external_user(external_user_id: str, expected_snapshot_
         raise
 
 
-def invalidate_app_snapshots(app_key: str) -> None:
-    """webhook catalog.changed:把该应用缓存标记为过期,下次检查/登录再拉。"""
+def invalidate_app_snapshots(app_key: str, catalog_version: int) -> None:
+    """webhook catalog.changed:抬高最低目录版本并过期缓存;已达该版本则幂等跳过。"""
 
     now = _facade().datetime.now(_facade().UTC)
     with _facade().SessionLocal() as db:
+        if not _raise_catalog_floor(db, app_key, catalog_version):
+            return
         db.query(_facade().PermissionSnapshot).filter(_facade().PermissionSnapshot.app_key == app_key).update(
             {_facade().PermissionSnapshot.expires_at: now},
             synchronize_session=False,
         )
         db.commit()
+
+
+def _catalog_floor(db, app_key: str) -> int:
+    setting = db.get(_facade().PlatformSetting, CATALOG_FLOOR_SETTING_KEY)
+    raw = (setting.value or {}).get(app_key, 0) if setting else 0
+    return raw if isinstance(raw, int) and raw > 0 else 0
+
+
+def _raise_catalog_floor(db, app_key: str, catalog_version: int) -> bool:
+    """已记录的最低版本 >= 宣布版本时返回 False(不改库);否则写入并返回 True。"""
+
+    setting = db.get(_facade().PlatformSetting, CATALOG_FLOOR_SETTING_KEY)
+    floors = dict(setting.value) if setting and setting.value else {}
+    current = floors.get(app_key, 0)
+    current = current if isinstance(current, int) else 0
+    if current >= catalog_version:
+        return False
+    floors[app_key] = catalog_version
+    if setting is None:
+        db.add(_facade().PlatformSetting(key=CATALOG_FLOOR_SETTING_KEY, value=floors))
+    else:
+        setting.value = floors
+    return True
+
+
+def _reject_below_catalog_floor(db, app_key: str, catalog_version: int) -> None:
+    if catalog_version < _catalog_floor(db, app_key):
+        raise _facade().HTTPException(409, "snapshot catalog_version is below announced minimum")
 
 
 def _external_snapshot_state(external_user_id: str):

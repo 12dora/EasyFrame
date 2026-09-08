@@ -619,7 +619,7 @@ def test_external_account_snapshot_bootstrap_retries_and_refreshes_expired(monke
         assert db.query(PermissionSnapshot).filter(PermissionSnapshot.account_id == account_id).count() == 0
 
     fake.fail = False
-    assert authz_api.ensure_account_snapshot(account_id) is True
+    assert authz_api.ensure_account_snapshot(account_id, force=True) is True
     with SessionLocal() as db:
         snapshot = db.query(PermissionSnapshot).filter(PermissionSnapshot.account_id == account_id).one()
         snapshot.expires_at = datetime.now(UTC) - timedelta(seconds=1)

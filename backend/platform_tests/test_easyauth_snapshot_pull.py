@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from blank_app.authz_snapshot import CATALOG_FLOOR_SETTING_KEY
 from blank_app.database import SessionLocal
 from blank_app.models import Account, PermissionSnapshot, PlatformSetting
 from enterprise_platform.authz import EasyAuthClientError, EasyAuthPermissionSnapshot
@@ -49,6 +50,9 @@ class _FakeClient:
 
 def _account(*, suffix: str) -> Account:
     with SessionLocal() as db:
+        floor = db.get(PlatformSetting, CATALOG_FLOOR_SETTING_KEY)
+        if floor is not None:
+            db.delete(floor)
         setting = db.get(PlatformSetting, "easyauth") or PlatformSetting(key="easyauth")
         setting.value = {**(setting.value or {}), "app_key": "enterprise-blank"}
         account = Account(
@@ -293,7 +297,7 @@ def test_invalidate_app_snapshots_marks_rows_expired() -> None:
 
     account = _account(suffix="invalidate")
     _store_snapshot(account, grant_version=1, catalog_version=1, expires_at=datetime.now(UTC) + timedelta(minutes=5))
-    invalidate_app_snapshots("enterprise-blank")
+    invalidate_app_snapshots("enterprise-blank", 2)
     with SessionLocal() as db:
         row = db.query(PermissionSnapshot).filter(PermissionSnapshot.account_id == account.id).one()
         assert row.expires_at <= datetime.now(UTC)
@@ -329,3 +333,4 @@ def test_webhook_secret_is_encrypted_like_credential() -> None:
             .first()
         )
         assert audit.after_data["webhook_secret"] == "[configured]"
+

@@ -230,7 +230,7 @@ def resolve_trusted_principal(headers: dict[str, str]) -> str | None:
         db.commit()
         db.refresh(account)
         account_id = str(account.id)
-    ensure_account_snapshot(account_id, force=True)
+    ensure_account_snapshot(account_id, force=False)
     return account_id
 
 
@@ -482,8 +482,8 @@ class BlankAuthorizationOperations:
     def refresh_snapshot_for_external_user(self, external_user_id: str, expected_snapshot_version: str) -> None:
         authz_snapshot.refresh_snapshot_for_external_user(external_user_id, expected_snapshot_version)
 
-    def invalidate_app_snapshots(self, app_key: str) -> None:
-        authz_snapshot.invalidate_app_snapshots(app_key)
+    def invalidate_app_snapshots(self, app_key: str, catalog_version: int) -> None:
+        authz_snapshot.invalidate_app_snapshots(app_key, catalog_version)
 
     def manifest(self, *, schema_version: int | None, actor_id: str) -> dict:
         if schema_version not in {None, FRAMEWORK_MANIFEST.schema_version}:
