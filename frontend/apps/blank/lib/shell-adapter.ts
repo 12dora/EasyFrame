@@ -8,7 +8,7 @@ import {
 } from "@easy-enterprise/ui/enterprise";
 import { platformRequest } from "./platform-api";
 
-export interface SecurityCapabilities { passwordChange: boolean; totpStatus: boolean; totpEnroll: boolean; totpDisable: boolean; passkeyList: boolean; passkeyRegister: boolean; passkeyDelete: boolean; }
+export type SecurityCapabilities = { passwordChange: boolean; totpStatus: boolean; totpEnroll: boolean; totpDisable: boolean; passkeyList: boolean; passkeyRegister: boolean; passkeyDelete: boolean; };
 interface CurrentUser {
   id: string;
   name: string;
@@ -30,6 +30,8 @@ export interface ShellIdentity {
   name: string;
   identity: string;
   avatarUrl: string | null;
+  /** Login email; null when absent (onboarding secondary line). */
+  email: string | null;
   hasLocalPassword: boolean;
   mustChangePassword: boolean;
   permissions: ReadonlySet<string>;
@@ -45,16 +47,48 @@ export interface ShellReminder { id: string; title: string; detail: string; urge
 /** The wire shape of `/api/v1/app-settings/general`; identical to the package value type. */
 export type ShellGeneralSettings = EnterpriseGeneralSettingsValue;
 
+/** `GET /api/v1/auth/session`: login-gated only, no permission code. */
+interface AuthSession { permissionRequestUrl?: string | null }
+
+/** `/auth/session` wait cap: on timeout treat the request URL as missing. */
+export const SESSION_TIMEOUT_MS = 5000;
+
+function trimmed(value: string | null | undefined): string | null {
+  const text = value?.trim();
+  return text ? text : null;
+}
+
+/**
+ * Permission-request URL. Any failure is null: the endpoint may be missing,
+ * the network may flake, and a hung request must not pin the shell on the
+ * loading skeleton. 401 here must not log the user out (`preserveSessionOn401`);
+ * `/auth/me` remains the session authority.
+ */
+export async function loadAuthSession(): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SESSION_TIMEOUT_MS);
+  try {
+    const session = await platformRequest<AuthSession>("/api/v1/auth/session", { signal: controller.signal }, { preserveSessionOn401: true });
+    return trimmed(session.permissionRequestUrl);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function loadShellIdentity(fallbackName: string, identityLabels: EnterpriseIdentityLabels): Promise<ShellIdentity> {
   const user = await platformRequest<CurrentUser>("/api/v1/auth/me");
   const permissions = new Set(user.permissions ?? []);
   const capability = (key: keyof SecurityCapabilities) => user.securityCapabilities?.[key] === true;
   const isLocalSuperadmin = user.isLocalSuperadmin === true;
   const resolvedIdentity = resolveEnterpriseIdentityLabel({ isLocalSuperadmin, roleGroups: user.roleGroups, permissions }, identityLabels);
+  const email = trimmed(user.email);
   return {
-    name: user.name?.trim() || user.email?.trim() || fallbackName,
+    name: trimmed(user.name) || email || fallbackName,
     identity: resolvedIdentity.label,
     identityKind: resolvedIdentity.kind,
+    email,
     avatarUrl: user.avatarUrl ?? null,
     hasLocalPassword: user.hasLocalPassword === true,
     mustChangePassword: user.mustChangePassword === true,

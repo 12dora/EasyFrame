@@ -14,6 +14,7 @@ async function mockPlatform(page: Page, general: Record<string, unknown> = defau
       return json(stored);
     }
     if (path === "/api/v1/auth/oidc/status") return json({ enabled: false, authorizePath: "" });
+    if (path === "/api/v1/auth/session") return json({ permissionRequestUrl: "https://easyauth.example.test/request" });
     if (path === "/api/v1/auth/me") return json({ id: "u1", name: "Framework Admin", email: "admin@example.com", avatarUrl: null, hasLocalPassword: true, permissions: ["auth.totp.create", "auth.totp.advance", "auth.passkey.view", "auth.passkey.create", "identity.integration.view", "identity.integration.manage", "authz.integration.view", "authz.integration.manage", "ops.upstream_health.view", "ops.upstream_health.manage", "notification.center.view", "settings.app_setting.update"], securityCapabilities: { passwordChange: true, totpStatus: true, totpEnroll: true, totpDisable: true, passkeyList: true, passkeyRegister: true, passkeyDelete: true }, grants: [{ permissionCode: "authz.integration.view", dataScope: "ALL" }] });
     if (path === "/api/v1/notifications") return json({ items: [], unreadCount: 0, nextCursor: null });
     if (path === "/api/v1/users/me/totp/status") return json({ enabled: false });
@@ -136,12 +137,29 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(page.locator('[data-test-id="login-oidc-status-error"]')).toHaveCount(0);
     expect(attempts).toBe(2);
   });
+  test("an account with no business access gets the full-screen onboarding page", async ({ page }) => {
+    await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "plain", name: "Plain user", email: "plain@example.com", hasLocalPassword: false, permissions: [] }) }));
+    await page.goto(`/${locale}/app`);
+    await expect(page.locator('[data-test-id="permission-onboarding"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="permission-onboarding-name"]')).toHaveText("Plain user");
+    await expect(page.locator('[data-test-id="permission-onboarding-request"]')).toHaveAttribute("href", "https://easyauth.example.test/request");
+    await expect(page.locator('[data-test-id="permission-onboarding-recheck"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="permission-onboarding-logout"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="admin-topbar-actions"]')).toHaveCount(0);
+    await expect(page.locator('[data-test-id="blank-workbench"]')).toHaveCount(0);
+
+    await page.route("**/api/v1/auth/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ permissionRequestUrl: null }) }));
+    await page.goto(`/${locale}/app`);
+    await expect(page.locator('[data-test-id="permission-onboarding"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="permission-onboarding-request"]')).toHaveCount(0);
+  });
   test("permission-gated blank routes return an explicit 403 surface", async ({ page }) => {
-    await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "plain", name: "Plain user", hasLocalPassword: false, permissions: [] }) }));
-    for (const path of ["security", "access", "upstream", "general"]) {
+    await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "viewer", name: "Viewer", hasLocalPassword: false, permissions: ["identity.integration.view"] }) }));
+    for (const path of ["security", "upstream", "general"]) {
       await page.goto(`/${locale}/app/settings/${path}`);
       await expect(page.locator('[data-test-id="permission-denied"]')).toBeVisible();
       await expect(page.locator('[data-test-id="blank-auth-loading"]')).toHaveCount(0);
+      await expect(page.locator('[data-test-id="permission-onboarding"]')).toHaveCount(0);
     }
     // 被拒的「通用」页仍然是那一页：标题照常渲染，且全页只有一个 H1。
     await page.goto(`/${locale}/app/settings/general`);
@@ -152,7 +170,7 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(page.locator('[data-test-id="permission-denied"]')).toBeVisible();
   });
   test("missing security capabilities fail closed despite local password and permissions", async ({ page }) => {
-    await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "legacy", name: "Legacy user", hasLocalPassword: true, permissions: ["auth.totp.advance", "auth.totp.create", "auth.passkey.view", "auth.passkey.create"] }) }));
+    await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "legacy", name: "Legacy user", hasLocalPassword: true, permissions: ["identity.integration.view", "auth.totp.advance", "auth.totp.create", "auth.passkey.view", "auth.passkey.create"] }) }));
     await page.goto(`/${locale}/app/settings/security`);
     await expect(page.locator('[data-test-id="permission-denied"]')).toBeVisible();
     await expect(page.locator('[data-test-id="topbar-user-menu-security"]')).toHaveCount(0);
@@ -275,7 +293,7 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await page.goto(`/${locale}/app`);
     await expect(page.locator('[data-test-id="topbar-user-role"]')).toHaveText(locale === "en" ? "Administrator" : "管理员");
 
-    await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "guest", name: "Guest", hasLocalPassword: false, permissions: [] }) }));
+    await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "guest", name: "Guest", hasLocalPassword: true, permissions: [], securityCapabilities: { passwordChange: true, totpStatus: false, totpEnroll: false, totpDisable: false, passkeyList: false, passkeyRegister: false, passkeyDelete: false } }) }));
     await page.goto(`/${locale}/app`);
     await expect(page.locator('[data-test-id="topbar-user-role"]')).toHaveText(locale === "en" ? "Guest" : "游客");
   });

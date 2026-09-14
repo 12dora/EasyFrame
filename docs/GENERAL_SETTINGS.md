@@ -63,5 +63,6 @@ EasyTrade 非镜像路径：`app/api/v1/app_settings.py` + `app_settings` 表，
 - 设置页框架：`EnterpriseSettingsPageFrame` 只负责宽度与居中，不再有 `title`；`BlankSettingsFrame` 与 `app/[locale]/app/settings/layout.tsx` 都不再传标题，每个设置页自带唯一 `PageHeader`。
 - 身份标签：`loadShellIdentity(fallbackName, identityLabels)` 用 `resolveEnterpriseIdentityLabel` 得到顶栏用户菜单里的 `identity` 与 `identityKind`（超管 → 管理员；有授权组 → 组名；仅有权限 → 用户；否则游客）。文案取共享目录的 `identity`，分隔符取 `access.authorization.roleGroupSeparator`。
 - 文案：`navigation.general` 与 `generalSettings` 都由 `createEnterpriseLabelCatalog` 提供，宿主 `lib/messages.ts` 只补自有条目（如 `navigation.accounts`），不要复制整份目录。
+- 零授权引导：见 [PERMISSION_ONBOARDING.md](PERMISSION_ONBOARDING.md)。身份加载后若 `!hasEnterpriseBusinessAccess(...)`，整页渲染 `EnterprisePermissionOnboarding`，不要放进 `EnterpriseAppFrame`。
 
 EasyUI 导出名（包 `@easy-enterprise/ui/enterprise`）：`EnterprisePermissionDeniedPage`、`EnterpriseGeneralSettingsSurface`、`EnterpriseGeneralSettingsValue`、`EnterpriseGeneralSettingsAdapter`、`EnterpriseGeneralSettingsLabels`、`EnterpriseBrandSlot`、`useEnterpriseGeneralSettings`、`primeEnterpriseGeneralSettings`、`resolveEnterpriseBrand`、`resolveEnterpriseFooterHtml`。`EnterpriseFooterSettingsSurface` 已删除。导航文案键为 `navigation.general`（通用 / General）。
