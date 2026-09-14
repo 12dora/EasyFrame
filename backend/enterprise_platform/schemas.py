@@ -184,6 +184,12 @@ class CurrentUser(PlatformModel):
     security_capabilities: SecurityCapabilities = Field(default_factory=SecurityCapabilities)
 
 
+class AuthSession(PlatformModel):
+    """登录态会话附属信息:仅权限申请入口,不带回接入状态或密钥。"""
+
+    permission_request_url: str | None = None
+
+
 NotificationLevel = Literal["info", "success", "warning", "error"]
 
 

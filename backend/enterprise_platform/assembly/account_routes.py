@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from enterprise_platform.assembly.dependencies import AssemblyDependencies
 from enterprise_platform.assembly.passkey_routes import register_passkey_routes
 from enterprise_platform.assembly.totp_routes import register_totp_routes
-from enterprise_platform.schemas import ChangePasswordRequest, CurrentUser
+from enterprise_platform.schemas import AuthSession, ChangePasswordRequest, CurrentUser
 
 
 def register_account_routes(router: APIRouter, ctx: AssemblyDependencies) -> None:
     _register_me(router, ctx)
+    _register_session(router, ctx)
     _register_logout(router, ctx)
     _register_change_password(router, ctx)
     register_totp_routes(router, ctx)
@@ -22,6 +23,27 @@ def _register_me(router: APIRouter, ctx: AssemblyDependencies) -> None:
     @router.get("/auth/me", response_model=CurrentUser, tags=["auth"])
     def me(user: CurrentUser = Depends(ctx.recovery_user)) -> CurrentUser:
         return ctx.hooks.present_current_user(user)
+
+
+def _register_session(router: APIRouter, ctx: AssemblyDependencies) -> None:
+    @router.get("/auth/session", response_model=AuthSession, tags=["auth"])
+    def get_session(user: CurrentUser = Depends(ctx.recovery_user)) -> AuthSession:
+        del user
+        return AuthSession(permission_request_url=_permission_request_url(ctx))
+
+
+def _permission_request_url(ctx: AssemblyDependencies) -> str | None:
+    """零授权用户必须能读到申请入口,因此本路由不校验权限码;集成未接或失败则返回 null。"""
+
+    getter = getattr(ctx.ports.integrations, "get_easyauth_status", None)
+    if not callable(getter):
+        return None
+    try:
+        status = ctx.port_call(getter)
+    except HTTPException:
+        return None
+    url = str(getattr(status, "permission_request_url", None) or "").strip()
+    return url or None
 
 
 def _register_logout(router: APIRouter, ctx: AssemblyDependencies) -> None:
