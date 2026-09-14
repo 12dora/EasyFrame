@@ -20,7 +20,7 @@ export function useBlankShellIdentity() { const identity = useContext(BlankShell
 export function BlankShell({ children, locale: rawLocale }: { children: ReactNode; locale: string }) {
   const locale = localeOf(rawLocale); const t = useMemo(() => messages(locale), [locale]); const pathname = usePathname(); const router = useRouter();
   const [panel, setPanel] = useState<string | null>(pathname.includes("/settings/") ? "settings" : null); const [identity, setIdentity] = useState<ShellIdentity | null>(null);
-  const [permissionRequestUrl, setPermissionRequestUrl] = useState<string | null>(null);
+  const [permissionRequestUrl, setPermissionRequestUrl] = useState<string | null | undefined>(undefined);
   const wasInSettings = useRef(pathname.includes("/settings/"));
   const [notifications, setNotifications] = useState<EnterpriseNotification[]>([]); const [notificationsLoading, setNotificationsLoading] = useState(false); const [notificationsError, setNotificationsError] = useState(false);
   const refreshNotifications = useCallback(async () => { setNotificationsLoading(true); setNotificationsError(false); try { setNotifications(await loadNotifications()); } catch { setNotificationsError(true); } finally { setNotificationsLoading(false); } }, []);
@@ -35,9 +35,13 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
       if (value.mustChangePassword && pathname !== forcedTarget) { router.replace(forcedTarget); return; }
       setIdentity(value);
     }).catch(() => { if (alive) { logout(); router.replace(`/${locale}/login?next=${encodeURIComponent(pathname)}`); } });
-    void loadAuthSession().then((url) => { if (alive) setPermissionRequestUrl(url); });
     return () => { alive = false; };
   }, [identityLabels, locale, pathname, router, t.brand]);
+  useEffect(() => {
+    let alive = true;
+    void loadAuthSession().then((url) => { if (alive) setPermissionRequestUrl(url); });
+    return () => { alive = false; };
+  }, []);
   useEffect(() => {
     const invalidate = () => {
       setIdentity(null);
@@ -80,6 +84,7 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
   const forcedTarget = `/${locale}/app/settings/security/password`;
   if (identity.mustChangePassword && pathname === forcedTarget) return <BlankShellIdentityContext.Provider value={identity}><EnterprisePublicShell topbar={topbar} footer={footer}>{children}</EnterprisePublicShell></BlankShellIdentityContext.Provider>;
   if (!hasEnterpriseBusinessAccess({ permissions: identity.permissions, securityCapabilities: identity.securityCapabilities, isLocalSuperadmin: identity.isLocalSuperadmin, businessPermissionCodes: BLANK_BUSINESS_PERMISSION_CODES })) {
+    if (permissionRequestUrl === undefined) return <main className="mx-auto w-full max-w-6xl p-6" data-test-id="blank-auth-loading"><PageLoadingSkeleton/></main>;
     const secondary = identity.email && identity.email !== identity.name ? identity.email : undefined;
     return (
       <EnterprisePermissionOnboarding

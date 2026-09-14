@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from enterprise_platform.assembly import PlatformPorts, PlatformRouteGroups, create_platform_router
+from enterprise_platform.auth import AuthError
 from enterprise_platform.schemas import CurrentUser, EasyAuthStatus
 
 
@@ -25,12 +26,12 @@ class _Integrations:
         return EasyAuthStatus(permission_request_url=self.url)
 
 
-def _client(*, integrations: object | None = None, me: bool = True) -> TestClient:
+def _client(*, account: object | None = None, integrations: object | None = None, me: bool = True) -> TestClient:
     app = FastAPI()
     app.include_router(
         create_platform_router(
             PlatformPorts(
-                account=_Account(),
+                account=account or _Account(),
                 app_settings=None,
                 notifications=None,
                 integrations=integrations,
@@ -73,6 +74,15 @@ def test_session_does_not_fail_open_when_easyauth_status_errors() -> None:
     response = _client(integrations=_Integrations(fail=True)).get("/api/v1/auth/session")
     assert response.status_code == 200
     assert response.json() == {"permissionRequestUrl": None}
+
+
+def test_session_rejects_unauthenticated_caller() -> None:
+    class _Guest:
+        def current_user(self) -> CurrentUser:
+            raise AuthError(401, "未登录")
+
+    response = _client(account=_Guest()).get("/api/v1/auth/session")
+    assert response.status_code == 401
 
 
 def test_session_follows_the_me_route_group() -> None:

@@ -19,6 +19,9 @@ blank_app 经 `create_platform_router` 自动挂载，无需再写一条宿主�
 ### 后端
 
 - 使用带 `/auth/session` 的 `enterprise_platform`；不要在宿主再复制一条 session 路由。
+- 已有路由权限清单测试的宿主，升指针时把 `("GET", "/api/v1/auth/session")` 加入已审阅的「只校验登录」名单。EasyCustoms：`backend/customs_tests/test_route_permission_manifest.py` 的 `_REVIEWED_AUTH_ONLY`。
+- 宿主若已自建 `/auth/session`（EasyLearning：`learning_app/api/session.py`），必须删掉：Starlette 先匹配到的那条会静默挡住后挂上的共享路由。
+- `/auth/session` 挂在路由组 `me`。`me=False` 的宿主（EasyTrade web 自建 `/auth/me`）拿不到共享 session，必须自己提供 `permissionRequestUrl`。
 - 零授权用户的 EasyAuth `permission_request_url` 仍走既有设置面（`authz-integration/settings`）。
 
 ### 前端模板（`frontend/apps/blank`）
@@ -26,7 +29,7 @@ blank_app 经 `create_platform_router` 自动挂载，无需再写一条宿主�
 - 升 EasyUI 到含 `EnterprisePermissionOnboarding` / `hasEnterpriseBusinessAccess` 的提交。
 - `lib/permissions.ts` — 把**带门禁的导航与设置面板**权限码列成 `BLANK_BUSINESS_PERMISSION_CODES`（空白站：`identity.integration.view`、`authz.integration.view`、`accounts.local.view`、`ops.upstream_health.view`、`settings.app_setting.update`）。通知中心不要列入。
 - `lib/shell-adapter.ts` — `loadAuthSession()` → `GET /api/v1/auth/session`；失败/超时/`""` 一律 `null`，且 `preserveSessionOn401`（会话对错只由 `/auth/me` 裁决）。
-- `components/blank-shell.tsx` — 身份加载完成后，强制改密页仍优先；否则当 `!hasEnterpriseBusinessAccess({ permissions, securityCapabilities, isLocalSuperadmin, businessPermissionCodes: BLANK_BUSINESS_PERMISSION_CODES })` 时，**整页渲染 `EnterprisePermissionOnboarding`，不要放进 `EnterpriseAppFrame`**。
+- `components/blank-shell.tsx` — 身份加载完成后，强制改密页仍优先；否则当 `!hasEnterpriseBusinessAccess({ permissions, securityCapabilities, isLocalSuperadmin, businessPermissionCodes: BLANK_BUSINESS_PERMISSION_CODES })` 时，**整页渲染 `EnterprisePermissionOnboarding`，不要放进 `EnterpriseAppFrame`**。`businessPermissionCodes` 必填。`/auth/session` 在独立的挂载 effect 里拉；`undefined` 表示仍在加载，引导页等有结论再画，避免申请链接在首屏之后才出现。
 - `onRecheck` 只重拉 `/auth/me`（`loadShellIdentity`）；`onLogout` 接到 `performEnterpriseLogout`；`permissionRequestUrl` 来自 `loadAuthSession`；文案用 `createEnterpriseLabelCatalog` 的 `permissionOnboarding`。
 - `firstAuthorizedAppPath` 一类登录后落点**不要改**；无权限改的是外壳，不是落点。
 
