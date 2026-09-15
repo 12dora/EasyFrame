@@ -56,4 +56,7 @@ export const enterpriseLogoutAdapter: EnterpriseLogoutAdapter = {
   authMethod,
   clearLocalSession: logout,
   clearAuthMethod,
+  // RP-initiated logout:本包据此在撤销本地会话之前向后端要 end-session 表单。
+  apiUrl: (path) => `${API_BASE}${path}`,
+  authToken,
 };
