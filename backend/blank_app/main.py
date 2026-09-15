@@ -146,7 +146,9 @@ app.include_router(
     prefix="/api/v1",
 )
 app.include_router(descriptor_router)
-app.include_router(create_oidc_router(BlankOidcHost()), prefix="/api/v1")
+app.include_router(
+    create_oidc_router(BlankOidcHost(), current_user_dependency=_local_accounts_current_user), prefix="/api/v1"
+)
 
 
 @app.get("/health")

@@ -45,6 +45,7 @@ class Account(BlankBase):
     totp_pending_secret: Mapped[str | None] = mapped_column(String(100))
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     sessions_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    oidc_id_token: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (

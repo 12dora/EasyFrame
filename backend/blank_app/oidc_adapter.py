@@ -89,3 +89,19 @@ class BlankOidcHost:
             )
             db.commit()
             return count
+
+    def store_id_token(self, account_id: str, id_token: str) -> None:
+        with SessionLocal() as db:
+            account = db.get(Account, account_id)
+            if account is None:
+                return
+            account.oidc_id_token = id_token
+            db.commit()
+
+    def end_session_hint(self, account_id: str) -> str | None:
+        with SessionLocal() as db:
+            account = db.get(Account, account_id)
+            if account is None or not account.external_source:
+                return None
+            token = account.oidc_id_token
+        return token if isinstance(token, str) and token.strip() else None

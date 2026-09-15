@@ -1,8 +1,55 @@
 # Authentik 身份变化与会话同步
 
-EasyFrame 提供两个互补机制：后通道注销撤销已签发的本地会话，静默复检识别上游会话消失或切换账号。
+EasyFrame 提供三套互补机制：RP 发起注销把浏览器送回应用登录页，后通道注销撤销已签发的本地会话，
+静默复检识别上游会话消失或切换账号。
 共享入口是 `enterprise_platform.oidc.create_oidc_router`，blank 宿主的实现位于
 `backend/blank_app/oidc_adapter.py`。EasyTrade、EasyCustoms 更新子模块后必须完成下列宿主接线。
+
+## RP 发起注销
+
+浏览器登出必须先拿到 Authentik end-session 的 POST 表单字段，再 `POST /auth/logout`。
+不要把 `id_token` 放进宿主 JWT 或前端存储；Authentik 校验 `id_token_hint` 时不查 `exp`，
+因此登录时落下的原始 ID token 一直可用来结束上游会话。
+
+`POST /api/v1/auth/oidc/end-session` 需要仍然有效的宿主 Bearer JWT（与 `/auth/logout` 相同的
+`recovery_user` / 未强制改密门禁的 `current_user`）。JSON 体全部可选：
+
+```json
+{ "returnTo": "/zh-CN/login" }
+```
+
+`returnTo` 必须是以单个 `/` 开头的相对路径；`//`、scheme、反斜杠、控制字符返回 422。
+绝对 `post_logout_redirect_uri` = `OidcConfig.frontend_base_url` + `returnTo`。成功 200：
+
+```json
+{
+  "url": "https://auth.example/application/o/<slug>/end-session/",
+  "method": "POST",
+  "fields": {
+    "id_token_hint": "<raw id_token>",
+    "post_logout_redirect_uri": "https://app.example/zh-CN/login"
+  }
+}
+```
+
+`returnTo` 缺省时省略 `post_logout_redirect_uri`。OIDC 未启用、本地账号、或从未经 OIDC 登录
+（没有存储 hint）时返回 `404 {"code":"NO_END_SESSION"}`。响应与日志都不得打印 token。
+`GET /auth/oidc/status` 仍返回无 query 的 `endSessionUrl`，供未升级的前端回退。
+
+后通道注销只更新 `sessions_revoked_at`，**不得**清除 `oidc_id_token`。`revoke_sessions` 同样不动 hint。
+
+每次 OIDC 回调（含静默复检）在 `upsert_identity` 之后调用 `OidcHost.store_id_token`。
+`end_session_hint` 对本地账号或空值返回 `None`。
+
+### 宿主接入清单
+
+子模块更新后，每个宿主必须镜像 blank：
+
+- `platform_accounts.oidc_id_token`（`Text`，可空）及对应 alembic 迁移
+- `OidcHost.store_id_token(account_id, id_token)` / `end_session_hint(account_id)`
+- `create_oidc_router(..., current_user_dependency=<与 /auth/logout 相同的登录依赖>)`
+- 升 EasyUI 指针（前端在登出时先调 end-session，再 `revoke`，再 POST 表单到 Authentik）
+- Authentik Provider 增加 `redirect_uri_type: logout` 的登录页 URI（regex `https://<host>/(zh-CN|en)/login`）；本仓不改线上 Provider
 
 ## 后通道注销
 

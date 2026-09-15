@@ -18,6 +18,7 @@ from jose import JWTError, jwt
 
 from enterprise_platform.jwks import valid_jwks
 from enterprise_platform.safe_http import UnsafeOutboundUrlError, guarded_request
+from enterprise_platform.schemas import CurrentUser
 
 STATE_COOKIE_NAME = "enterprise_oidc_state"
 STATE_COOKIE_PATH = "/api/v1/auth/oidc"
@@ -120,6 +121,8 @@ class OidcHost(Protocol):
     def upsert_identity(self, identity: OidcIdentity) -> str: ...
     def issue_session(self, account_id: str) -> str: ...
     def revoke_sessions_by_subject(self, sub: str) -> int: ...
+    def store_id_token(self, account_id: str, id_token: str) -> None: ...
+    def end_session_hint(self, account_id: str) -> str | None: ...
 
 
 def default_locale_resolver(request: Request) -> str | None:
@@ -338,7 +341,12 @@ def fetch_userinfo(config: OidcConfig, token: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def create_oidc_router(host: OidcHost, *, routes: OidcRouteConfig | None = None) -> APIRouter:
+def create_oidc_router(
+    host: OidcHost,
+    *,
+    routes: OidcRouteConfig | None = None,
+    current_user_dependency: Callable[..., CurrentUser] | None = None,
+) -> APIRouter:
     from enterprise_platform.oidc_callback import register_oidc_callback
     from enterprise_platform.oidc_logout import register_backchannel_logout
     from enterprise_platform.oidc_start import register_oidc_start
@@ -346,8 +354,7 @@ def create_oidc_router(host: OidcHost, *, routes: OidcRouteConfig | None = None)
     route_config = routes or OidcRouteConfig()
     router = APIRouter(prefix="/auth/oidc", tags=["auth-oidc"])
 
-    register_oidc_start(router, host, route_config)
-
+    register_oidc_start(router, host, route_config, current_user_dependency)
     register_oidc_callback(router, host, route_config)
     register_backchannel_logout(router, host)
     return router
