@@ -11,15 +11,22 @@ EasyFrame 提供三套互补机制：RP 发起注销把浏览器送回应用登�
 不要把 `id_token` 放进宿主 JWT 或前端存储；Authentik 校验 `id_token_hint` 时不查 `exp`，
 因此登录时落下的原始 ID token 一直可用来结束上游会话。
 
-`POST /api/v1/auth/oidc/end-session` 需要仍然有效的宿主 Bearer JWT（与 `/auth/logout` 相同的
-`recovery_user` / 未强制改密门禁的 `current_user`）。JSON 体全部可选：
+`POST /api/v1/auth/oidc/end-session` 需要仍然有效的宿主 Bearer JWT。把 blank 的零参 callable
+（`_local_accounts_current_user`，内部读 `account_adapter.current_user()`）传给
+`create_oidc_router(..., current_user_dependency=...)`；框架用 `Depends(current_user_dependency)`
+注册，FastAPI 会注入 `Request` 与子依赖。不要传入已经包好的 `Depends(...)` 对象，也不要把
+`/auth/logout` 装配链上的 `recovery_user` 误当成「同一个对象」塞进来。依赖若抛 `AuthError`，
+由宿主 app 的异常处理器转成 401（blank 已有）。JSON 体全部可选：
 
 ```json
 { "returnTo": "/zh-CN/login" }
 ```
 
-`returnTo` 必须是以单个 `/` 开头的相对路径；`//`、scheme、反斜杠、控制字符返回 422。
-绝对 `post_logout_redirect_uri` = `OidcConfig.frontend_base_url` + `returnTo`。成功 200：
+`returnTo` 必须是以单个 `/` 开头的相对路径，最长 500；`//`、scheme、反斜杠、控制字符、空白
+（含 U+0020 与 NBSP）、非 ASCII、百分号编码的斜杠（`%2f` / `%2F`）、`.` / `..` 路径段返回 422。
+`frontend_base_url` 只填站点 origin（尾斜杠可选，不要带 `/zh-CN` 或 `/en`）。拼接
+`post_logout_redirect_uri` 时会去掉尾斜杠，并剥掉末尾的 locale 段，避免 `/zh-CN/zh-CN/login`。
+成功 200：
 
 ```json
 {
@@ -33,13 +40,17 @@ EasyFrame 提供三套互补机制：RP 发起注销把浏览器送回应用登�
 ```
 
 `returnTo` 缺省时省略 `post_logout_redirect_uri`。OIDC 未启用、本地账号、或从未经 OIDC 登录
-（没有存储 hint）时返回 `404 {"code":"NO_END_SESSION"}`。响应与日志都不得打印 token。
+（没有存储 hint）时返回 `404 {"code":"NO_END_SESSION"}`。配置不完整（缺 `frontend_base_url` 等）
+返回 409，JSON 含 `detail` / `kind`，与后通道一致。响应与日志都不得打印 token。
 `GET /auth/oidc/status` 仍返回无 query 的 `endSessionUrl`，供未升级的前端回退。
+未实现 `store_id_token` / `end_session_hint` 的旧宿主在构造 router 时打一条 warning；回调跳过
+存 token（登录仍成功），end-session 按无 hint 返回 404，前端走 GET 回落。
 
 后通道注销只更新 `sessions_revoked_at`，**不得**清除 `oidc_id_token`。`revoke_sessions` 同样不动 hint。
 
 每次 OIDC 回调（含静默复检）在 `upsert_identity` 之后调用 `OidcHost.store_id_token`。
-`end_session_hint` 对本地账号或空值返回 `None`。
+超过 8 KiB 的 token 不落库。迁移前已登录的会话没有 hint，需要下一次交互登录或静默复检才会写入；
+此前 end-session 返回 404，前端走 GET 回落。`end_session_hint` 对本地账号或空值返回 `None`。
 
 ### 宿主接入清单
 
@@ -47,9 +58,17 @@ EasyFrame 提供三套互补机制：RP 发起注销把浏览器送回应用登�
 
 - `platform_accounts.oidc_id_token`（`Text`，可空）及对应 alembic 迁移
 - `OidcHost.store_id_token(account_id, id_token)` / `end_session_hint(account_id)`
-- `create_oidc_router(..., current_user_dependency=<与 /auth/logout 相同的登录依赖>)`
+- `create_oidc_router(..., current_user_dependency=_local_accounts_current_user)`：传入 **plain callable**
+  （blank 的零参 `account_adapter.current_user` 包装即可）。框架以 `Depends(current_user_dependency)`
+  注册，FastAPI 负责注入。不要传入 `Depends(...)` 对象。
+- **先**把 CSP `form-action` 加上 Authentik 源（`form-action 'self' https://auth.jiefakj.com`），
+  **然后才**升 EasyUI 指针并补适配器的 `apiUrl` / `authToken`。现有宿主都是 `form-action 'self'`；
+  少这一源，浏览器会静默拦掉 end-session 隐藏表单（不抛异常、页面停在原地，本地已登出而
+  Authentik 会话还活着）。接线顺序与措辞见 EasyUI
+  [`docs/LOGOUT.md`](../frontend/packages/easy-enterprise/docs/LOGOUT.md)「先给 CSP 的 `form-action` 放行 Authentik 源」。
 - 升 EasyUI 指针（前端在登出时先调 end-session，再 `revoke`，再 POST 表单到 Authentik）
 - Authentik Provider 增加 `redirect_uri_type: logout` 的登录页 URI（regex `https://<host>/(zh-CN|en)/login`）；本仓不改线上 Provider
+- `frontend_base_url` 只填 origin，不要复制带 `/zh-CN` 的登录 URL
 
 ## 后通道注销
 
@@ -146,6 +165,10 @@ Cache-Control: no-store
 
 若站点已有 CSP，合并该路径的 `frame-ancestors` 指令，不能同时遗留会阻止 iframe 的
 `DENY` 或 `frame-ancestors 'none'`。不要全站放宽 frame 策略。
+RP 发起注销还会向 Authentik origin POST 隐藏表单：全站 CSP 的 `form-action` 必须在 `'self'`
+之外包含该源（生产是 `https://auth.jiefakj.com`），且必须排在启用 EasyUI 登出适配器成员之前。
+只加这一个源，不要写 `form-action *`。详见 EasyUI
+[`docs/LOGOUT.md`](../frontend/packages/easy-enterprise/docs/LOGOUT.md)。
 后端静默重定向已设置 `no-store`；宿主仍须为最终 HTML 页面独立配置这些响应头。
 还需确认 Authentik 授权导航可在宿主 iframe 内完成；若上游响应头阻止嵌入，检查会超时。
 当前部署的应用与 `auth.jiefakj.com` 同属 HTTPS 的 `jiefakj.com` 站点，使用 SameSite=Lax；

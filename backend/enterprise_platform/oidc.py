@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import secrets
 import time
 from collections.abc import Callable
@@ -24,6 +25,9 @@ STATE_COOKIE_NAME = "enterprise_oidc_state"
 STATE_COOKIE_PATH = "/api/v1/auth/oidc"
 STATE_PURPOSE = "enterprise-oidc-state"
 STATE_TTL_SECONDS = 600
+MAX_STORED_ID_TOKEN_BYTES = 8 * 1024
+_OPTIONAL_HOST_METHODS = ("store_id_token", "end_session_hint")
+_LOG = logging.getLogger(__name__)
 _jwks_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _PROVIDER_ERROR_KINDS = frozenset(
     {
@@ -341,6 +345,16 @@ def fetch_userinfo(config: OidcConfig, token: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _warn_if_host_missing_logout_methods(host: OidcHost) -> None:
+    missing = [name for name in _OPTIONAL_HOST_METHODS if getattr(host, name, None) is None]
+    if missing:
+        _LOG.warning(
+            "OidcHost %s is missing %s; OIDC login continues, RP-initiated logout degrades",
+            type(host).__name__,
+            ", ".join(missing),
+        )
+
+
 def create_oidc_router(
     host: OidcHost,
     *,
@@ -351,6 +365,7 @@ def create_oidc_router(
     from enterprise_platform.oidc_logout import register_backchannel_logout
     from enterprise_platform.oidc_start import register_oidc_start
 
+    _warn_if_host_missing_logout_methods(host)
     route_config = routes or OidcRouteConfig()
     router = APIRouter(prefix="/auth/oidc", tags=["auth-oidc"])
 

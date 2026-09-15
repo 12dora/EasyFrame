@@ -46,7 +46,10 @@ class _Callback:
         if not claims.get("picture"):
             claims = {**oidc.fetch_userinfo(self.config, str(tokens.get("access_token") or "")), **claims}
         account = self.host.upsert_identity(oidc.OidcIdentity.from_claims(claims))
-        self.host.store_id_token(account, str(tokens["id_token"]))
+        id_token = str(tokens["id_token"])
+        store = getattr(self.host, "store_id_token", None)
+        if store is not None and len(id_token.encode()) <= oidc.MAX_STORED_ID_TOKEN_BYTES:
+            store(account, id_token)
         token = self.host.issue_session(account)
         if self.silent:
             return self.redirect({"outcome": "authenticated", "token": token, "account": account})

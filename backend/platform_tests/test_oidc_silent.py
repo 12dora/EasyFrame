@@ -105,7 +105,7 @@ def test_silent_provider_failure_is_error(silent_client, error, kind):
 
 @pytest.mark.parametrize("subject", ["alice", "bob"])
 def test_silent_success_reports_current_account_and_new_session(silent_client, monkeypatch, subject):
-    client, _, _ = silent_client
+    client, host, _ = silent_client
     monkeypatch.setattr(oidc, "validate_id_token", lambda *_: {"sub": subject, "name": subject, "picture": "avatar"})
     state = _authorize(client, "silent=1&next=/zh-CN/settings")["state"]
     _assert_silent(
@@ -117,6 +117,7 @@ def test_silent_success_reports_current_account_and_new_session(silent_client, m
         },
         locale="zh-CN",
     )
+    assert host.stored_id_tokens[f"local-{subject}"] == "provider-token"
 
 
 @pytest.mark.parametrize(
