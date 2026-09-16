@@ -30,6 +30,7 @@ pydantic==2.13.4
 pydantic_core==2.46.4
 pyOpenSSL==26.3.0
 PyOTP==2.10.0
+pypinyin==0.55.0
 python-jose==3.5.0
 rsa==4.9.1
 six==1.17.0

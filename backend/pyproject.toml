@@ -11,6 +11,7 @@ name = "easyframe-platform"
 version = "0.1.0"
 description = "EasyFrame 共享企业平台内核(enterprise_platform)"
 requires-python = ">=3.11"
+dependencies = ["pypinyin==0.55.0"]
 
 [tool.setuptools]
 packages = [

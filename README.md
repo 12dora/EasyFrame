@@ -11,7 +11,7 @@
 
 ## 组成
 
-- `backend/enterprise_platform/` — 共享企业平台内核(认证/授权/OIDC/passkey/通知/健康/限流),被 EasyTrade、EasyCustoms 以 git submodule 方式消费
+- `backend/enterprise_platform/` — 共享企业平台内核(认证/授权/OIDC/passkey/通知/健康/限流/拼音人名检索),被 EasyTrade、EasyCustoms 以 git submodule 方式消费
 - `backend/blank_app/` — 框架站宿主(FastAPI + 独立 alembic 迁移),同时是新宿主的复制模板
 - `backend/platform_tests/` — 平台契约测试(消费方镜像也会打包运行,作为接收框架更新时的安全门禁)
 - `frontend/apps/blank/` — 框架站前端(Next.js);`frontend/packages/easy-enterprise` 为 [EasyUI](https://github.com/12dora/EasyUI) submodule
@@ -46,6 +46,18 @@ make blank-up                          # 构建并起栈,--wait 到健康为止
 接收框架更新:宿主仓执行
 `git submodule update --remote backend/easyframe && git submodule update --remote frontend/packages/easy-enterprise`,
 跑门禁后提交指针。
+
+## 拼音人名检索
+
+`enterprise_platform.pinyin` 把目录人员的全拼 / 首字母检索做成框架能力,公开名与 EasyLearning 本地实现相同,宿主可改成再导出。
+
+宿主接入三步:
+
+1. **模型混入** `PinyinNameMixin`(声明顺序 `class DirectoryUser(PinyinNameMixin, HostBase)`)。模型必须已有 `name` 列;`@validates("name")` 会在构造和后续赋值时写入 `name_pinyin` / `name_pinyin_initials`。
+2. **迁移加列**:`name_pinyin`、`name_pinyin_initials` 均为 `VARCHAR(128) NOT NULL DEFAULT ''`,并建索引(mixin 声明了 `index=True`)。已有行按 `pinyin_full` / `pinyin_initials` 回填。
+3. **列表查询**用 `person_name_match(keyword, Model.name, Model.name_pinyin, Model.name_pinyin_initials)`:姓名列始终做转义 ILIKE 子串;仅纯 ASCII 字母数字查询才再匹配两列拼音。其它关键字过滤可复用 `ilike_contains`;内存过滤用 `matches_person_query`。
+
+运行时依赖 `pypinyin==0.55.0`(已写入 `backend/pyproject.toml` 与 `requirements.blank*.txt`)。
 
 ## 表格(列表页)
 
@@ -87,6 +99,7 @@ make blank-e2e                         # = pnpm --dir frontend blank:e2e(Playwri
 
 ## 文档
 
+- 上文「拼音人名检索」— 宿主目录模型混入 `PinyinNameMixin`、迁移两列、列表查询走 `person_name_match`
 - [docs/LOCAL_ACCOUNTS.md](docs/LOCAL_ACCOUNTS.md) — 本地账户管理(超管建号、权限授予、2FA 救援)的接口与行为契约
 - [docs/EASYAUTH_EVENTS.md](docs/EASYAUTH_EVENTS.md) — EasyAuth 授权变更 webhook、快照拉取规则与宿主镜像清单
 - [docs/GENERAL_SETTINGS.md](docs/GENERAL_SETTINGS.md) — 通用设置（名称/副标题/页脚/标志）线合同、页脚 shim 与宿主镜像清单
