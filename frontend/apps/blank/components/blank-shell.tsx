@@ -9,48 +9,27 @@ import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import brandLogo from "../assets/brand/jiefa_logo.webp";
 import { BlankAntdProvider } from "./antd-provider";
-import { enterpriseLogoutAdapter, logout } from "../lib/auth-adapter";
+import { enterpriseLogoutAdapter } from "../lib/auth-adapter";
 import { localeOf, messages } from "../lib/messages";
 import { BLANK_BUSINESS_PERMISSION_CODES } from "../lib/permissions";
-import { BLANK_AUTH_INVALIDATED_EVENT } from "../lib/platform-api";
-import { dismissAllNotifications, dismissNotification, loadAuthSession, loadGeneralSettings, loadNotifications, loadShellIdentity, type ShellIdentity } from "../lib/shell-adapter";
+import { dismissAllNotifications, dismissNotification, loadGeneralSettings, loadNotifications, type ShellIdentity } from "../lib/shell-adapter";
+import { onboardingReady, useShellIdentity } from "./use-shell-identity";
 
 const BlankShellIdentityContext = createContext<ShellIdentity | null>(null);
 export function useBlankShellIdentity() { const identity = useContext(BlankShellIdentityContext); if (!identity) throw new Error("Blank shell identity is not available"); return identity; }
 
 export function BlankShell({ children, locale: rawLocale }: { children: ReactNode; locale: string }) {
   const locale = localeOf(rawLocale); const t = useMemo(() => messages(locale), [locale]); const pathname = usePathname(); const router = useRouter();
-  const [panel, setPanel] = useState<string | null>(pathname.includes("/settings/") ? "settings" : null); const [identity, setIdentity] = useState<ShellIdentity | null>(null);
-  const [permissionRequestUrl, setPermissionRequestUrl] = useState<string | null | undefined>(undefined);
+  const [panel, setPanel] = useState<string | null>(pathname.includes("/settings/") ? "settings" : null);
   const wasInSettings = useRef(pathname.includes("/settings/"));
   const [notifications, setNotifications] = useState<EnterpriseNotification[]>([]); const [notificationsLoading, setNotificationsLoading] = useState(false); const [notificationsError, setNotificationsError] = useState(false);
   const refreshNotifications = useCallback(async () => { setNotificationsLoading(true); setNotificationsError(false); try { setNotifications(await loadNotifications()); } catch { setNotificationsError(true); } finally { setNotificationsLoading(false); } }, []);
   // 生产身份事实来自可信网关/Authentik 注入后由 `/auth/me` 验证；本地 JWT 只是
   // 开发/demo 的可选凭据，不能成为进入框架站的前置门禁。`/auth/session` 只补申请入口。
   const identityLabels = useMemo(() => ({ ...t.identity, separator: t.access.authorization.roleGroupSeparator }), [t]);
-  useEffect(() => {
-    let alive = true;
-    const forcedTarget = `/${locale}/app/settings/security/password`;
-    loadShellIdentity(t.brand, identityLabels).then((value) => {
-      if (!alive) return;
-      if (value.mustChangePassword && pathname !== forcedTarget) { router.replace(forcedTarget); return; }
-      setIdentity(value);
-    }).catch(() => { if (alive) { logout(); router.replace(`/${locale}/login?next=${encodeURIComponent(pathname)}`); } });
-    return () => { alive = false; };
-  }, [identityLabels, locale, pathname, router, t.brand]);
-  useEffect(() => {
-    let alive = true;
-    void loadAuthSession().then((url) => { if (alive) setPermissionRequestUrl(url); });
-    return () => { alive = false; };
-  }, []);
-  useEffect(() => {
-    const invalidate = () => {
-      setIdentity(null);
-      router.replace(`/${locale}/login?next=${encodeURIComponent(pathname)}`);
-    };
-    window.addEventListener(BLANK_AUTH_INVALIDATED_EVENT, invalidate);
-    return () => window.removeEventListener(BLANK_AUTH_INVALIDATED_EVENT, invalidate);
-  }, [locale, pathname, router]);
+  // 身份、强制改密拦截、401 踢人与跨标签页换人都在这个钩子里（感知加载：本标签页快照秒开、
+  // `/auth/session` 后台补齐、导航后的例行复查排到空闲）。
+  const { identity, permissionUrlPending, refreshIdentity } = useShellIdentity({ locale, pathname, fallbackName: t.brand, identityLabels });
   useEffect(() => { const inSettings = pathname.includes("/settings/"); if (inSettings && !wasInSettings.current) setPanel("settings"); if (!inSettings) setPanel(null); wasInSettings.current = inSettings; }, [pathname]);
   const canNotifications = Boolean(identity?.permissions.has("notification.center.view"));
   useEffect(() => { if (!canNotifications) return; const timer = window.setTimeout(() => void refreshNotifications(), 0); return () => window.clearTimeout(timer); }, [canNotifications, refreshNotifications]);
@@ -80,7 +59,8 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
   }, [active, activePrefix, canSecurity, href, identity, pathname, t]);
   const renderLink: RenderNavLink = ({ href: target, active: isActive, className, testId, onNavigate, children: label }) => <Link href={target} aria-current={isActive ? "page" : undefined} className={className} data-test-id={testId} onClick={onNavigate}>{label}</Link>;
   const openPanel = (next: NavPanel) => { setPanel(next.id); router.push(next.firstHref); };
-  if (!identity) return <main className="mx-auto w-full max-w-6xl p-6" data-test-id="blank-auth-loading"><PageLoadingSkeleton/></main>;
+  const loading = <main className="mx-auto w-full max-w-6xl p-6" data-test-id="blank-auth-loading"><PageLoadingSkeleton/></main>;
+  if (!identity) return loading;
   const topbar = <Topbar brand={
     <EnterpriseBrandSlot href={href("/app")} title={brand.title} subtitle={brand.subtitle} logoSrc={brand.logoSrc} testId="app-brand" renderLink={({ href: target, className, children: label, testId }) => <Link href={target} className={className} data-test-id={testId}>{label}</Link>}/>
   } actions={<EnterpriseTopbarActions pathKey={pathname} locale={locale} localeOptions={[{ code: "zh-CN", label: "中文" }, { code: "en", label: "English" }]} onLocaleChange={(next) => router.replace(localizedLocation(pathname, locale, String(next)))} labels={t.shell} notifications={canNotifications ? { items: notifications, loading: notificationsLoading, error: notificationsError, viewAllHref: href("/app/notifications"), onOpen: () => void refreshNotifications(), onDismiss: async (id) => { setNotifications((current) => current.filter((item) => item.id !== id)); await dismissNotification(id).catch(() => void refreshNotifications()); }, onDismissAll: async () => { setNotifications([]); await dismissAllNotifications().catch(() => void refreshNotifications()); } } : undefined} user={{ name: identity.name, identity: identity.identity, avatarUrl: identity.avatarUrl, permissionSummary: t.common.permissionCount(identity.permissions.size) }} securityHref={canSecurity ? href("/app/settings/security") : undefined} renderLink={({ href: target, className, testId, role, children: label }) => <Link href={target} className={className} data-test-id={testId} role={role}>{label}</Link>} onLogout={() => performEnterpriseLogout(enterpriseLogoutAdapter, () => router.replace(`/${locale}/logged-out`))}/>} />;
@@ -89,13 +69,14 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
   const content = <BlankAntdProvider locale={locale}>{children}</BlankAntdProvider>;
   if (identity.mustChangePassword && pathname === forcedTarget) return <BlankShellIdentityContext.Provider value={identity}><EnterprisePublicShell topbar={topbar} footer={footer}>{content}</EnterprisePublicShell></BlankShellIdentityContext.Provider>;
   if (!hasEnterpriseBusinessAccess({ permissions: identity.permissions, securityCapabilities: identity.securityCapabilities, isLocalSuperadmin: identity.isLocalSuperadmin, businessPermissionCodes: BLANK_BUSINESS_PERMISSION_CODES })) {
-    if (permissionRequestUrl === undefined) return <main className="mx-auto w-full max-w-6xl p-6" data-test-id="blank-auth-loading"><PageLoadingSkeleton/></main>;
+    // 引导页的全部内容就是那个申请入口，没它不成页 —— 只有这一页会等 `/auth/session`。
+    if (!onboardingReady(identity, permissionUrlPending)) return loading;
     const secondary = identity.email && identity.email !== identity.name ? identity.email : undefined;
     return (
       <EnterprisePermissionOnboarding
         identity={{ displayName: identity.name, secondaryLabel: secondary, avatarUrl: identity.avatarUrl }}
-        permissionRequestUrl={permissionRequestUrl}
-        onRecheck={() => loadShellIdentity(t.brand, identityLabels).then(setIdentity)}
+        permissionRequestUrl={identity.permissionRequestUrl}
+        onRecheck={refreshIdentity}
         onLogout={() => { void performEnterpriseLogout(enterpriseLogoutAdapter, () => router.replace(`/${locale}/logged-out`)); }}
         labels={t.permissionOnboarding}
       />

@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 
 /**
- * Adapter-level unit tests for the blank host.
+ * Adapter- and hook-level unit tests for the blank host.
  * Run via the monorepo vitest binary (blank does not ship vitest as a dep):
  *
  *   pnpm --dir packages/easy-enterprise exec vitest run --config ../../apps/blank/vitest.config.ts
@@ -16,8 +16,10 @@ export default defineConfig({
   // react 实例上("Cannot read properties of null (reading 'useState')")。
   resolve: { dedupe: ["react", "react-dom"] },
   test: {
-    environment: "node",
+    // happy-dom (not node): the shell identity store lives in sessionStorage and
+    // `components/use-shell-identity.test.tsx` mounts a real React root.
+    environment: "happy-dom",
     globals: false,
-    include: ["lib/**/*.test.{ts,tsx}"],
+    include: ["lib/**/*.test.{ts,tsx}", "components/**/*.test.{ts,tsx}"],
   },
 });

@@ -42,6 +42,8 @@ export interface ShellIdentity {
   isLocalSuperadmin: boolean;
   /** Standing behind `identity`; see `resolveEnterpriseIdentityLabel`. */
   identityKind: EnterpriseIdentityKind;
+  /** EasyAuth permission-request entry point (`/auth/session`); null when unset or unreadable. */
+  permissionRequestUrl: string | null;
 }
 export interface ShellReminder { id: string; title: string; detail: string; urgent: boolean; }
 /** The wire shape of `/api/v1/app-settings/general`; identical to the package value type. */
@@ -77,8 +79,18 @@ export async function loadAuthSession(): Promise<string | null> {
   }
 }
 
-export async function loadShellIdentity(fallbackName: string, identityLabels: EnterpriseIdentityLabels): Promise<ShellIdentity> {
-  const user = await platformRequest<CurrentUser>("/api/v1/auth/me");
+/**
+ * Two-phase result of `startShellIdentityLoad`: the identity lands first, the
+ * permission-request URL follows.
+ */
+export interface ShellIdentityLoad {
+  /** The `/auth/me` identity. `permissionRequestUrl` is null here — `session` fills it in. */
+  readonly identity: ShellIdentity;
+  /** The parallel `/auth/session`; resolves to null on failure or timeout and never rejects. */
+  readonly session: Promise<string | null>;
+}
+
+function toShellIdentity(user: CurrentUser, fallbackName: string, identityLabels: EnterpriseIdentityLabels): ShellIdentity {
   const permissions = new Set(user.permissions ?? []);
   const capability = (key: keyof SecurityCapabilities) => user.securityCapabilities?.[key] === true;
   const isLocalSuperadmin = user.isLocalSuperadmin === true;
@@ -104,7 +116,34 @@ export async function loadShellIdentity(fallbackName: string, identityLabels: En
     },
     accountId: typeof user.accountId === "string" ? user.accountId : user.id,
     isLocalSuperadmin,
+    permissionRequestUrl: null,
   };
+}
+
+/**
+ * Two-phase shell identity load (perceived loading): both requests leave in the same tick, but
+ * only `/auth/me` is awaited.
+ *
+ * `/auth/me` is the hard dependency (its 401 is still thrown to the caller). `/auth/session` only
+ * supplies a permission-request URL: once the identity is in hand the shell must paint, because
+ * the page's first batch of data requests all queue behind the shell. Waiting up to
+ * `SESSION_TIMEOUT_MS` for an auxiliary request would delay every table by that much.
+ */
+export async function startShellIdentityLoad(fallbackName: string, identityLabels: EnterpriseIdentityLabels): Promise<ShellIdentityLoad> {
+  // Fire first, await second: both requests leave in the same event-loop turn.
+  const session = loadAuthSession();
+  const user = await platformRequest<CurrentUser>("/api/v1/auth/me");
+  return { identity: toShellIdentity(user, fallbackName, identityLabels), session };
+}
+
+/**
+ * The all-at-once identity (both requests still parallel). The shell uses
+ * `startShellIdentityLoad`; this thin wrapper stays for callers that want one complete identity
+ * and for the contract tests — same signature, same return type.
+ */
+export async function loadShellIdentity(fallbackName: string, identityLabels: EnterpriseIdentityLabels): Promise<ShellIdentity> {
+  const { identity, session } = await startShellIdentityLoad(fallbackName, identityLabels);
+  return { ...identity, permissionRequestUrl: await session };
 }
 export async function loadNotifications(): Promise<ShellReminder[]> { const result = await platformRequest<NotificationPage>("/api/v1/notifications?limit=100"); return result.items.filter((item) => !item.readAt).map((item) => ({ id: item.id, title: item.title, detail: item.body, urgent: item.level === "error" || item.level === "warning" })); }
 export function dismissNotification(id: string) { return platformRequest<{ ok: boolean }>(`/api/v1/notifications/${encodeURIComponent(id)}/read`, { method: "POST" }); }

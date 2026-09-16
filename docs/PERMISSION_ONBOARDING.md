@@ -28,9 +28,9 @@ blank_app 经 `create_platform_router` 自动挂载，无需再写一条宿主�
 
 - 升 EasyUI 到含 `EnterprisePermissionOnboarding` / `hasEnterpriseBusinessAccess` 的提交。
 - `lib/permissions.ts` — 把**带门禁的导航与设置面板**权限码列成 `BLANK_BUSINESS_PERMISSION_CODES`（空白站：`identity.integration.view`、`authz.integration.view`、`accounts.local.view`、`ops.upstream_health.view`、`settings.app_setting.update`）。通知中心不要列入。
-- `lib/shell-adapter.ts` — `loadAuthSession()` → `GET /api/v1/auth/session`；失败/超时/`""` 一律 `null`，且 `preserveSessionOn401`（会话对错只由 `/auth/me` 裁决）。
-- `components/blank-shell.tsx` — 身份加载完成后，强制改密页仍优先；否则当 `!hasEnterpriseBusinessAccess({ permissions, securityCapabilities, isLocalSuperadmin, businessPermissionCodes: BLANK_BUSINESS_PERMISSION_CODES })` 时，**整页渲染 `EnterprisePermissionOnboarding`，不要放进 `EnterpriseAppFrame`**。`businessPermissionCodes` 必填。`/auth/session` 在独立的挂载 effect 里拉；`undefined` 表示仍在加载，引导页等有结论再画，避免申请链接在首屏之后才出现。
-- `onRecheck` 只重拉 `/auth/me`（`loadShellIdentity`）；`onLogout` 接到 `performEnterpriseLogout`；`permissionRequestUrl` 来自 `loadAuthSession`；文案用 `createEnterpriseLabelCatalog` 的 `permissionOnboarding`。
+- `lib/shell-adapter.ts` — `loadAuthSession()` → `GET /api/v1/auth/session`；失败/超时/`""` 一律 `null`，且 `preserveSessionOn401`（会话对错只由 `/auth/me` 裁决）。外壳走 `startShellIdentityLoad()`：两条请求同 tick 发出，只 `await` `/auth/me`，`permissionRequestUrl` 后台补（见 [SHELL_PERCEIVED_LOADING.md](SHELL_PERCEIVED_LOADING.md)）。
+- `components/blank-shell.tsx` — 身份加载完成后，强制改密页仍优先；否则当 `!hasEnterpriseBusinessAccess({ permissions, securityCapabilities, isLocalSuperadmin, businessPermissionCodes: BLANK_BUSINESS_PERMISSION_CODES })` 时，**整页渲染 `EnterprisePermissionOnboarding`，不要放进 `EnterpriseAppFrame`**。`businessPermissionCodes` 必填。`/auth/session` 与 `/auth/me` 同 tick 发出但不阻塞外壳；**只有引导页**在 `onboardingReady(identity, permissionUrlPending)` 为假时继续画骨架屏，避免申请链接在首屏之后才出现。
+- `onRecheck` 接 `useShellIdentity` 的 `refreshIdentity`（立即重取 `/auth/me`）；`onLogout` 接到 `performEnterpriseLogout`；`permissionRequestUrl` 读 `identity.permissionRequestUrl`；文案用 `createEnterpriseLabelCatalog` 的 `permissionOnboarding`。
 - `firstAuthorizedAppPath` 一类登录后落点**不要改**；无权限改的是外壳，不是落点。
 
 EasyUI 导出名：`EnterprisePermissionOnboarding`、`EnterprisePermissionOnboardingProps`、`EnterprisePermissionOnboardingIdentity`、`EnterprisePermissionOnboardingLabels`、`hasEnterpriseBusinessAccess`、`EnterpriseBusinessAccessInput`。接线说明见 EasyUI `docs/PERMISSION-ONBOARDING.md`。

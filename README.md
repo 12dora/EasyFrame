@@ -104,6 +104,7 @@ make blank-e2e                         # = pnpm --dir frontend blank:e2e(Playwri
 - [docs/EASYAUTH_EVENTS.md](docs/EASYAUTH_EVENTS.md) — EasyAuth 授权变更 webhook、快照拉取规则与宿主镜像清单
 - [docs/GENERAL_SETTINGS.md](docs/GENERAL_SETTINGS.md) — 通用设置（名称/副标题/页脚/标志）线合同、页脚 shim 与宿主镜像清单
 - [docs/PERMISSION_ONBOARDING.md](docs/PERMISSION_ONBOARDING.md) — 零授权账号引导页、`GET /auth/session` 与宿主接线清单
+- [docs/SHELL_PERCEIVED_LOADING.md](docs/SHELL_PERCEIVED_LOADING.md) — 外壳身份的感知加载（只等 `/auth/me`、本标签页快照、空闲复查）与宿主接入清单
 
 ## 许可
 

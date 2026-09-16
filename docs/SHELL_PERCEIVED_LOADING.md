@@ -1,0 +1,129 @@
+# 外壳身份的感知加载（首屏）
+
+同一个标签页里翻到第二页时，用户看到的是骨架屏还是页面，取决于**外壳身份什么时候落地**——
+`components/blank-shell.tsx` 在拿到身份之前不挂 `children`，页面的第一条列表请求因此一条都还没发出。
+
+本文是 blank 模板里这条链路的契约与宿主镜像清单。源头改动来自 EasyLearning
+（`perf(shell)` 6d74cf9 + `fix(review)` e53fcd0），已回流到模板。
+
+## 改前的时序
+
+```
+SSR 骨架屏 → hydration → await Promise.all([GET /auth/me, GET /auth/session]) → 外壳 + 页面 → GET /<列表>
+```
+
+即**列表请求的起跑线 = max(T_me, T_session)**。`/auth/session` 只提供一个「权限申请入口」，
+却由 `SESSION_TIMEOUT_MS = 5000` 封顶——它慢一秒，所有表格就晚一秒开始；最坏 +5s 纯白屏。
+另外每一次客户端导航都会重发这两条请求，和新页面的列表请求同时在途。
+
+## 改后的三件事
+
+### 1. 只等 `/auth/me`（`lib/shell-adapter.ts`）
+
+`startShellIdentityLoad(fallbackName, identityLabels)` 把两条请求放在同一个 tick 发出，只 `await`
+`/auth/me`，交回一个**永不 reject** 的 `session: Promise<string | null>`（失败 / 超时都回 `null`）。
+身份里的 `permissionRequestUrl` 先给 `null`，由调用方在后台补。
+
+`loadShellIdentity(fallbackName, identityLabels)` 保留为薄封装（= 新 API + `await session`），
+签名与返回类型不变，既有调用方与契约测试不受影响。
+
+结果：**列表请求的起跑线从 `max(T_me, T_session)` 降到 `T_me`**。
+
+### 2. 本标签页身份快照（`lib/identity-cache.ts`，新增）
+
+外壳身份的**外部存储**（`useSyncExternalStore` 的那个 store）：内存那份是当前身份，
+sessionStorage 只是给下一次页面加载留的底稿。
+
+- **不会 hydration 不匹配**：`getServerSnapshot` 恒为 `null` → SSR 与 hydration 首帧仍是骨架屏，
+  hydration 完成后 React 才按快照重画。也因此不需要「effect 里 setState」。
+- **对账**（`reconcileIdentity`）：`accountId` 相同 → 用真身份；不同 → 整份替换重画。
+  `/auth/session` 还在途时沿用快照里的申请入口，引导页按钮不会先消失再出现；
+  一旦 `/auth/session` 落地（第三个参数 `sessionSettled = true`），**它的答案即权威，`null` 也算**
+  ——否则一个已被取消配置的申请地址会靠快照在同标签页每次刷新时复活。
+- **等价即不动**（`sameIdentity`）：导航后的例行复查不该让整棵树重渲染。
+- **安全边界**：只进 sessionStorage（随标签页结束、不跨标签页），按 `locale` 分档（身份行与兜底名
+  是本地化文案），字段不合契约就整份作废，**强制改密的身份只活在内存、绝不落盘**，
+  `try/catch` 包住所有存储读写（隐私模式会抛）。快照只影响画面，权限判定仍在服务端。
+- `scheduleWhenIdle(run)` / `IDLE_TIMEOUT_MS = 1200`：把「可以晚一点做」的事排到
+  `requestIdleCallback`（无该 API 时退化成定时器），返回取消函数。
+
+### 3. 外壳钩子（`components/use-shell-identity.ts`，新增）
+
+`useShellIdentity({ locale, pathname, fallbackName, identityLabels })` → `{ identity, permissionUrlPending, refreshIdentity }`。
+
+- 身份状态读上面那个 store；快照在手就立刻出外壳与页面，真身份回来后台对账。
+- **首屏与显式 `refreshIdentity()`（引导页的「重新检查」）立即取；导航后的例行复查排到空闲**
+  （≤1.2s），连续导航自动取消合并。快照读不出来时（首屏、刚换语言）一律立即取——
+  那时候屏幕上本来就是骨架屏，再让 1.2s 只是让空白多挂一会儿。
+- **强制改密拦截不变**：除改密页外不给身份 + `router.replace` 过去；判定直接看已拿到的身份
+  （`blocked`），不再依赖「每次导航重取 `/auth/me`」。被拦的账号照旧不落盘。
+- **401 / 加载失败的处理不变**：清本地会话（`endLocalSession`）+ 回登录页；
+  平台层的 `BLANK_AUTH_INVALIDATED_EVENT` 走同一条路。
+- **跨标签页换人**：监听 `storage` 事件上的 `AUTH_TOKEN_STORAGE_KEY`，变了就清快照并整页重载
+  ——否则这一页会一直画着上一个人的侧栏，直到下一次请求撞上 401。
+- `onboardingReady(identity, permissionUrlPending)`：零授权引导页（**且只有这一页**）在申请入口未知
+  且 `/auth/session` 仍在途时继续显示骨架屏——那一页的全部内容就是那个入口。
+- `refreshIdentity()` 返回 `Promise<void>`，在这次重取落地时才 resolve：
+  `EnterprisePermissionOnboarding` 靠 `await onRecheck()` 驱动「重新检查」按钮的忙态，
+  返回 `void` 会让忙态在同一个微任务里就消失。
+
+## 清快照的两个调用点（务必接对）
+
+`clearCachedIdentity()` 必须在**显式结束会话**时调用，并且**绝不能塞进 `logout()` 本身**：
+平台层拿到 401 也调 `logout()`，那一路正要靠内存里的身份把外壳留在屏幕上。
+
+模板里的接法是 `lib/auth-adapter.ts` 的 `endLocalSession() { clearCachedIdentity(); logout(); }`，
+接在这两处：
+
+1. **登出适配器** — `enterpriseLogoutAdapter.clearLocalSession: endLocalSession`（`lib/auth-adapter.ts`）。
+2. **改密成功回登录页** — `completeEnterprisePasswordChange({ clearLocalSession: endLocalSession, … })`。
+   模板有**两个**这样的页面：`app/[locale]/app/settings/security/page.tsx`（普通改密）与
+   `app/[locale]/app/settings/security/password/page.tsx`（强制改密），两个都要改。
+
+外壳自己的踢人路径（`ejectToLogin`）也走 `endLocalSession`，已在钩子里接好。
+
+`lib/identity-cache.test.ts` 的 `endLocalSession` 一组用例把这四条钉住了（包括「401 那一路的
+`logout()` 不碰快照」），复制到宿主后不要删。
+
+## 宿主接入清单（EasyTrade / EasyCustoms / EasyLearning）
+
+### 对照模板 diff 这些文件
+
+| 文件 | 改动 |
+|---|---|
+| `lib/shell-adapter.ts` | `ShellIdentity` 加 `permissionRequestUrl: string \| null`；新增 `ShellIdentityLoad` / `startShellIdentityLoad` / 抽出 `toShellIdentity`；`loadShellIdentity` 改为薄封装 |
+| `lib/identity-cache.ts` | **整份新增**，只改 `CACHE_KEY` 为本宿主前缀（模板：`blank.shell.identity`） |
+| `lib/auth-adapter.ts` | 导出 `AUTH_TOKEN_STORAGE_KEY`（跨标签页 `storage` 监听要按它过滤）；新增 `endLocalSession`；`clearLocalSession` 改指它 |
+| `components/use-shell-identity.ts` | **整份新增**（宿主若已有同名钩子则按此重写）；`BLANK_AUTH_INVALIDATED_EVENT`、登录路径、强制改密路径按本宿主改 |
+| `components/blank-shell.tsx` | 三个 effect（身份 / session / auth-invalidated）整体换成 `useShellIdentity`；`permissionRequestUrl` 改读 `identity.permissionRequestUrl`；引导页门禁改 `onboardingReady`；`onRecheck` 改 `refreshIdentity` |
+| `app/…/settings/security/page.tsx`、`app/…/settings/security/password/page.tsx` | `clearLocalSession: logout` → `clearLocalSession: endLocalSession` |
+| `vitest.config.ts` | `environment` 改 `happy-dom`（快照住在 sessionStorage，钩子用例要挂真实 React 根）；`include` 加 `components/**` |
+| `lib/identity-cache.test.ts`、`components/use-shell-identity.test.tsx`、`lib/shell-adapter.test.ts` | 新增 / 补用例 |
+
+### 宿主自己必须动的调用点
+
+- **两处 `clearCachedIdentity`**（见上一节）：登出适配器的 `clearLocalSession`，以及**每一个**
+  `completeEnterprisePasswordChange` 调用点。漏掉任何一个，下一个人登录时会先看到上一位的外壳与侧栏，
+  页面的第一批请求也照着上一位发。
+- **静默身份复查**（有 `useEnterpriseIdentityCheck` 接线的宿主，如 EasyLearning；blank 模板没有）：
+  把 `enabled` 加一道 `armed` 门，用 `scheduleWhenIdle` 打开，首屏那圈隐藏 iframe 的 OIDC 重定向
+  就不再和列表请求抢；**401 恢复不等这个窗口**（`revalidateSession` 要能提前打开并把这一次复查排队结算）。
+- **凭据 key**：`AUTH_TOKEN_STORAGE_KEY` 必须等于本宿主真正写进 `localStorage` 的那个 key。
+- **`CACHE_KEY` 每个宿主独立**，且 `CACHE_VERSION` 在 `ShellIdentity` 字段变动时 +1。
+- **共用同一份身份加载的其它外壳**（EasyLearning 的 `TakingFrame`）跟着改用同一个钩子，不要另起一份。
+
+### 与 EasyLearning 当前实现的三点差异（回流时一并修）
+
+- **`refreshIdentity()` 返回 `Promise<void>`**（EasyLearning 返回 `void`）：见上。
+- **`reconcileIdentity(cached, fresh, sessionSettled)` 的第三个参数**（EasyLearning 没有）：
+  没有它时，一个被取消配置的 `permission_request_url` 会靠快照在同标签页每次刷新时复活
+  ——`/auth/session` 回了 `null`，而对账规则一律沿用快照里的旧值。
+- 另外 EasyLearning 的 `app/[locale]/(shell)/app/settings/security/page.tsx`（普通改密）
+  仍接 `clearLocalSession: logout`，**漏了一个清快照的调用点**。
+
+### 已知不变量（回归时照着看）
+
+- SSR / hydration 首帧仍是骨架屏，`console` 无 hydration 不匹配。
+- 强制改密账号：除改密页外拿不到身份，且 sessionStorage 里没有任何快照。
+- 零授权引导页：申请入口未知时仍等 `/auth/session`；有业务权限的人不受影响。
+- 401 与会话失效的落点、登录重定向的 `next=` 参数一字未变。
