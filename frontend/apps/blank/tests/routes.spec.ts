@@ -82,6 +82,16 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
 
     await page.goto(`/${locale}/app/notifications`);
     await expect(page.locator('[data-test-id="notification-center-page"]')).toBeVisible();
+
+    // 模板自带的示例列表页(宿主接入真实列表后连同 app/[locale]/app/examples 一起删掉):
+    // 表头搜索 / 筛选的漏斗在,深链的筛选条件能还原出来。
+    await page.goto(`/${locale}/app/examples/table`);
+    await expect(page.locator('[data-test-id="examples-table-page"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="examples-table"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="q-search-icon"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="status-filter-icon"]')).toBeVisible();
+    await page.goto(`/${locale}/app/examples/table?status=archived`);
+    await expect(page.locator('[data-test-id="status-filter-icon"]')).toHaveAttribute("data-active", "true");
   });
   test("public login, logged-out and OIDC callback routes are reachable", async ({ page }) => {
     const response = await page.goto(`/${locale}/login`); await expect(page.locator('[data-test-id="enterprise-login-page"]')).toBeVisible(); await expect(page.locator("main")).toHaveCount(1);

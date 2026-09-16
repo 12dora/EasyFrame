@@ -8,6 +8,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import brandLogo from "../assets/brand/jiefa_logo.webp";
+import { BlankAntdProvider } from "./antd-provider";
 import { enterpriseLogoutAdapter, logout } from "../lib/auth-adapter";
 import { localeOf, messages } from "../lib/messages";
 import { BLANK_BUSINESS_PERMISSION_CODES } from "../lib/permissions";
@@ -73,7 +74,9 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
       ...(canAccounts ? [{ key: "accounts", label: t.navigation.accounts, href: href("/app/settings/accounts"), active: activePrefix("/app/settings/accounts") }] : []),
       ...(canUpstream ? [{ key: "upstream", label: t.navigation.upstream, href: href("/app/settings/upstream"), active: activePrefix("/app/settings/upstream") }] : []),
     ];
-    return { groups: [{ key: "main", nodes: [{ kind: "link", link: { key: "dashboard", label: t.navigation.dashboard, href: href("/app"), active: active("/app") } }] }, ...(settingsItems.length ? [{ key: "system", divider: true, nodes: [{ kind: "panel" as const, panel: { id: "settings", label: t.navigation.settings, active: pathname.includes("/settings/"), firstHref: settingsItems[0].href, items: settingsItems } }] }] : [])] };
+    // 示例分组:新宿主复制模板后,连同 `app/[locale]/app/examples` 与 `components/examples` 一起删掉。
+    const examplesGroup = { key: "examples", divider: true, nodes: [{ kind: "link" as const, link: { key: "examples-table", label: t.examples.navLabel, href: href("/app/examples/table"), active: activePrefix("/app/examples") } }] };
+    return { groups: [{ key: "main", nodes: [{ kind: "link", link: { key: "dashboard", label: t.navigation.dashboard, href: href("/app"), active: active("/app") } }] }, examplesGroup, ...(settingsItems.length ? [{ key: "system", divider: true, nodes: [{ kind: "panel" as const, panel: { id: "settings", label: t.navigation.settings, active: pathname.includes("/settings/"), firstHref: settingsItems[0].href, items: settingsItems } }] }] : [])] };
   }, [active, activePrefix, canSecurity, href, identity, pathname, t]);
   const renderLink: RenderNavLink = ({ href: target, active: isActive, className, testId, onNavigate, children: label }) => <Link href={target} aria-current={isActive ? "page" : undefined} className={className} data-test-id={testId} onClick={onNavigate}>{label}</Link>;
   const openPanel = (next: NavPanel) => { setPanel(next.id); router.push(next.firstHref); };
@@ -82,7 +85,9 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
     <EnterpriseBrandSlot href={href("/app")} title={brand.title} subtitle={brand.subtitle} logoSrc={brand.logoSrc} testId="app-brand" renderLink={({ href: target, className, children: label, testId }) => <Link href={target} className={className} data-test-id={testId}>{label}</Link>}/>
   } actions={<EnterpriseTopbarActions pathKey={pathname} locale={locale} localeOptions={[{ code: "zh-CN", label: "中文" }, { code: "en", label: "English" }]} onLocaleChange={(next) => router.replace(localizedLocation(pathname, locale, String(next)))} labels={t.shell} notifications={canNotifications ? { items: notifications, loading: notificationsLoading, error: notificationsError, viewAllHref: href("/app/notifications"), onOpen: () => void refreshNotifications(), onDismiss: async (id) => { setNotifications((current) => current.filter((item) => item.id !== id)); await dismissNotification(id).catch(() => void refreshNotifications()); }, onDismissAll: async () => { setNotifications([]); await dismissAllNotifications().catch(() => void refreshNotifications()); } } : undefined} user={{ name: identity.name, identity: identity.identity, avatarUrl: identity.avatarUrl, permissionSummary: t.common.permissionCount(identity.permissions.size) }} securityHref={canSecurity ? href("/app/settings/security") : undefined} renderLink={({ href: target, className, testId, role, children: label }) => <Link href={target} className={className} data-test-id={testId} role={role}>{label}</Link>} onLogout={() => performEnterpriseLogout(enterpriseLogoutAdapter, () => router.replace(`/${locale}/logged-out`))}/>} />;
   const forcedTarget = `/${locale}/app/settings/security/password`;
-  if (identity.mustChangePassword && pathname === forcedTarget) return <BlankShellIdentityContext.Provider value={identity}><EnterprisePublicShell topbar={topbar} footer={footer}>{children}</EnterprisePublicShell></BlankShellIdentityContext.Provider>;
+  // antd 环境只包一层,受保护内容与强制改密页共用同一个 provider。
+  const content = <BlankAntdProvider locale={locale}>{children}</BlankAntdProvider>;
+  if (identity.mustChangePassword && pathname === forcedTarget) return <BlankShellIdentityContext.Provider value={identity}><EnterprisePublicShell topbar={topbar} footer={footer}>{content}</EnterprisePublicShell></BlankShellIdentityContext.Provider>;
   if (!hasEnterpriseBusinessAccess({ permissions: identity.permissions, securityCapabilities: identity.securityCapabilities, isLocalSuperadmin: identity.isLocalSuperadmin, businessPermissionCodes: BLANK_BUSINESS_PERMISSION_CODES })) {
     if (permissionRequestUrl === undefined) return <main className="mx-auto w-full max-w-6xl p-6" data-test-id="blank-auth-loading"><PageLoadingSkeleton/></main>;
     const secondary = identity.email && identity.email !== identity.name ? identity.email : undefined;
@@ -97,7 +102,7 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
     );
   }
   const openPanelId = pathname.includes("/settings/") ? panel : null;
-  return <BlankShellIdentityContext.Provider value={identity}><MotionConfig reducedMotion="user"><EnterpriseAppFrame topbar={topbar} sidebar={<Sidebar model={model} openPanelId={openPanelId} onOpenPanel={openPanel} onBack={() => setPanel(null)} renderLink={renderLink} backLabel={t.navigation.backToMain} navLabel={t.navigation.menu}/>} mobileNav={<MobileNav model={model} renderLink={renderLink} backLabel={t.navigation.backToMain} menuLabel={t.navigation.menu} closeLabel={t.navigation.close} navLabel={t.navigation.menu} pathKey={pathname}/>} footer={footer} mainClassName="pb-12">{children}</EnterpriseAppFrame></MotionConfig></BlankShellIdentityContext.Provider>;
+  return <BlankShellIdentityContext.Provider value={identity}><MotionConfig reducedMotion="user"><EnterpriseAppFrame topbar={topbar} sidebar={<Sidebar model={model} openPanelId={openPanelId} onOpenPanel={openPanel} onBack={() => setPanel(null)} renderLink={renderLink} backLabel={t.navigation.backToMain} navLabel={t.navigation.menu}/>} mobileNav={<MobileNav model={model} renderLink={renderLink} backLabel={t.navigation.backToMain} menuLabel={t.navigation.menu} closeLabel={t.navigation.close} navLabel={t.navigation.menu} pathKey={pathname}/>} footer={footer} mainClassName="pb-12">{content}</EnterpriseAppFrame></MotionConfig></BlankShellIdentityContext.Provider>;
 }
 
 function localizedLocation(pathname: string, locale: string, nextLocale: string) {

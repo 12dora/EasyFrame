@@ -1,3 +1,6 @@
 @import "tailwindcss";
 @source "../../../packages/easy-enterprise/src";
 @import "@easy-enterprise/ui/theme.css";
+/* 表格套件的样式(表头不折行、树形行动效);顺序必须在 theme.css 之后、宿主自有样式之前。
+   见 EasyUI src/README.md 的「表格」一节。 */
+@import "@easy-enterprise/ui/table.css";

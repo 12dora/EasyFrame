@@ -47,6 +47,31 @@ make blank-up                          # 构建并起栈,--wait 到健康为止
 `git submodule update --remote backend/easyframe && git submodule update --remote frontend/packages/easy-enterprise`,
 跑门禁后提交指针。
 
+## 表格(列表页)
+
+列表页的所有约定都在 EasyUI 里,宿主**不自己接** antd `Table`、`ConfigProvider`、URL 查询状态
+与列装饰器,只提供路由、文案与行内操作。完整 API 与契约见
+[EasyUI `src/README.md` 的「表格」一节](frontend/packages/easy-enterprise/src/README.md)。
+
+blank 模板已经把三处接线做好,复制成新宿主时原样保留:
+
+- `frontend/apps/blank/app/globals.css` — 导入顺序 `tailwindcss` → `@source` EasyUI src →
+  `@easy-enterprise/ui/theme.css` → `@easy-enterprise/ui/table.css`(表头不折行等 token 表达不了的规则)
+- `frontend/apps/blank/components/antd-provider.tsx` — antd 环境只在 `BlankShell` 里包一层,
+  按站点语言 `next/dynamic` 加载 EasyUI 的 `provider-zh` / `provider-en`(`ssr: true`);
+  页面里**不要**再嵌套带 `cssVar` 的 `ConfigProvider`,页面级主题走 `token` / `components`
+- `frontend/apps/blank/lib/table-query.ts` — 唯一的 Next 适配层:
+  `useTableQuery(config)` = `useTableQueryWith(config, { pathname, search, replace })`,
+  并把 `useLocalTableQuery`(对话框里不写地址栏的表格)与 kit 类型一并转出,页面统一从这里 import
+
+写一张表:`const CONFIG = {...} as const satisfies TableQueryConfig`(必须是模块常量或
+`useMemo`,否则每渲染都会重建列、把用户刚打开的漏斗关掉)→ `useTableQuery(CONFIG)` →
+`searchColumn` / `filterColumn` / `sortColumn` / `withEllipsis` 装饰列 → `DataTable`。
+可运行的样板在 `frontend/apps/blank/components/examples/table-example.tsx`
+(路由 `/[locale]/app/examples/table`,导航里的「示例」项),**新宿主接入真实列表后请连同
+`app/[locale]/app/examples`、`components/examples`、`lib/messages.ts` 的 `examples` 文案块与
+导航里的 examples 分组一起删掉**。
+
 ## 常用命令
 
 ```bash
