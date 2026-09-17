@@ -179,17 +179,44 @@ def test_cancelled_pending_future_clears_inflight(monkeypatch) -> None:
 
 def test_worker_unexpected_exception_logs(caplog) -> None:
     refresher = BackgroundRefresher()
-    caplog.set_level(logging.ERROR)
+    refresh_log = logging.getLogger("enterprise_platform.authz.snapshot_freshness")
+    refresh_log.disabled = False
+    caplog.set_level(logging.ERROR, logger=refresh_log.name)
 
     def boom() -> None:
         raise RuntimeError("db blip")
 
-    assert refresher.schedule("exc:user", boom) is True
-    refresher.wait()
-    assert any("authz background refresh failed" in rec.message for rec in caplog.records)
-    assert refresher.schedule("exc:user", lambda: None) is True
-    refresher.wait()
-    refresher.shutdown()
+    try:
+        assert refresher.schedule("exc:user", boom) is True
+        refresher.wait()
+        deadline = time.monotonic() + 2
+        matched: list[logging.LogRecord] = []
+        while time.monotonic() < deadline:
+            matched = [
+                rec
+                for rec in caplog.records
+                if rec.name == refresh_log.name
+                and rec.levelno >= logging.ERROR
+                and "authz background refresh failed" in rec.getMessage()
+            ]
+            if matched:
+                break
+            time.sleep(0.01)
+        assert matched, [(rec.name, rec.levelno, rec.getMessage()) for rec in caplog.records]
+        rec = matched[0]
+        assert rec.levelno == logging.ERROR
+        assert rec.exc_info is not None
+        exc_type, exc, tb = rec.exc_info
+        assert exc_type is RuntimeError
+        assert str(exc) == "db blip"
+        assert tb is not None
+        formatted = logging.Formatter().format(rec)
+        assert "Traceback (most recent call last)" in formatted
+        assert "RuntimeError: db blip" in formatted
+        assert refresher.schedule("exc:user", lambda: None) is True
+        refresher.wait()
+    finally:
+        refresher.shutdown()
 
 
 def test_schedule_returns_false_when_shutdown_races_submit() -> None:
