@@ -60,6 +60,32 @@ function PathProbe({ path }: { path: string }) {
   return null;
 }
 
+/**
+ * 模拟 `platformRequest` 的在途 GET 合并:有未落地的请求时再调用拿到的是同一个 thenable,
+ * 落地先离开合并表(登记在调用方的 then 之前),之后的调用才发新请求。
+ */
+const shared = { calls: [] as Deferred<string>[], open: null as Deferred<string> | null };
+const loadShared = () => {
+  if (!shared.open) {
+    const next = deferred<string>();
+    const leave = () => { if (shared.open === next) shared.open = null; };
+    next.promise.then(leave, leave);
+    shared.open = next;
+    shared.calls.push(next);
+  }
+  return shared.open.promise;
+};
+
+function SharedProbe() {
+  const state = useAsyncData(loadShared, true, { cacheKey: "/orders/shared" });
+  useEffect(() => { latest = state; });
+  return null;
+}
+
+async function settleShared(index: number, value: string) {
+  await act(async () => { shared.calls[index]?.resolve(value); for (let tick = 0; tick < 6; tick += 1) await Promise.resolve(); });
+}
+
 let objectPending: Deferred<{ items: string[] }> | null = null;
 let objectLatest: AsyncData<{ items: string[] }> | null = null;
 const loadObject = () => {
@@ -222,9 +248,11 @@ describe("useAsyncData cache events", () => {
     // 写之前发出的复查(第 2 条)还在路上,写操作完成后失效。
     act(() => invalidateAsyncData("/orders?q=a"));
     expect(current()).toMatchObject({ data: "before-write", refreshing: true, loading: false });
-    expect(pending.get("a")).toHaveLength(3);
+    // 重取排在被作废的那次落地之后(真实传输会把同路径 GET 合并到在途请求上)。
+    expect(pending.get("a")).toHaveLength(2);
     await settle("a", "stale-read", 1);
     expect(current().data).toBe("before-write");
+    expect(pending.get("a")).toHaveLength(3);
     await settle("a", "after-write", 2);
     expect(current()).toMatchObject({ data: "after-write", refreshing: false });
   });
@@ -290,6 +318,51 @@ describe("useAsyncData cache events", () => {
     act(() => invalidateAsyncData("/orders?q=a"));
     remount({ name: "a" });
     expect(frames[0]).toMatchObject({ data: null, loading: true });
+  });
+});
+
+/** 被作废的读取 HTTP 还在路上:同键的下一次读取不许并进同一个 GET(传输层会合并纯 GET)。 */
+describe("useAsyncData with a merged transport GET", () => {
+  beforeEach(() => {
+    shared.calls.length = 0;
+    shared.open = null;
+  });
+
+  // 写穿作废了在途复查,调用方又补一次 reload():补的读取若并进同一个在途 GET,写之前的回包会以新 epoch 落地。
+  it("does not let a follow-up reload join the GET that a replace retired", async () => {
+    const mountShared = () => {
+      act(() => root.unmount());
+      root = createRoot(container);
+      act(() => root.render(<SharedProbe />));
+    };
+    mountShared();
+    await settleShared(0, "before-write");
+    mountShared();
+    expect(current()).toMatchObject({ data: "before-write", refreshing: true });
+    act(() => {
+      replaceAsyncData("/orders/shared", "written");
+      current().reload();
+    });
+    expect(shared.calls).toHaveLength(2);
+    await settleShared(1, "pre-write-body");
+    expect(current().data).toBe("written");
+    expect(shared.calls).toHaveLength(3);
+    await settleShared(2, "after-write");
+    expect(current()).toMatchObject({ data: "after-write", loading: false, refreshing: false });
+  });
+
+  it("does not let the refetch after an invalidation join the retired GET", async () => {
+    act(() => root.render(<SharedProbe />));
+    await settleShared(0, "before-write");
+    act(() => current().reload());
+    act(() => invalidateAsyncData("/orders/shared"));
+    expect(shared.calls).toHaveLength(2);
+    await settleShared(1, "pre-write-body");
+    expect(current().data).toBe("before-write");
+    expect(hasAsyncData("/orders/shared")).toBe(false);
+    await settleShared(2, "after-write");
+    expect(current().data).toBe("after-write");
+    expect(hasAsyncData("/orders/shared")).toBe(true);
   });
 });
 

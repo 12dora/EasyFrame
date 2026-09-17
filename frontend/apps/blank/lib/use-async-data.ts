@@ -101,9 +101,25 @@ interface CacheEventWiring<T> {
   epoch: { current: number };
   setState: (update: (previous: Slot<T>) => Slot<T>) => void;
   refetch: () => void;
+  /** 本钩子当前在途的读取(落地后清空)。 */
+  inFlight: { current: PendingLoad | null };
+  /** 被事件作废、HTTP 还没回来的那次读取:同键的下一次读取要等它落地再发。 */
+  retired: { current: PendingLoad | null };
 }
 
-function useCacheEvents<T>({ enabled, key, state, epoch, setState, refetch }: CacheEventWiring<T>): void {
+/**
+ * 一次读取与它「已落地」的信号。
+ *
+ * 作废只发生在钩子层,HTTP 请求还在路上;`platformRequest` 会把同路径同令牌的纯 GET 合并到在途请求上,
+ * 此刻立即重取(失效后的重取、写穿后调用方补的 `reload()`)拿到的就是写之前的那份回包,且新 epoch 会照单全收。
+ * 所以同键的下一次读取排在被作废那次落地(并离开合并表)之后再发。
+ */
+interface PendingLoad {
+  readonly key: string | null;
+  readonly settled: Promise<void>;
+}
+
+function useCacheEvents<T>({ enabled, key, state, epoch, setState, refetch, inFlight, retired }: CacheEventWiring<T>): void {
   const latest = useRef(state);
   useEffect(() => { latest.current = state; });
   useEffect(() => {
@@ -111,10 +127,15 @@ function useCacheEvents<T>({ enabled, key, state, epoch, setState, refetch }: Ca
     return subscribeAsyncData((event) => {
       if (!concerns(event, key, latest.current)) return;
       epoch.current += 1;
+      const pending = inFlight.current;
+      if (pending) {
+        retired.current = pending;
+        void pending.settled.then(() => { if (retired.current === pending) retired.current = null; });
+      }
       setState((previous) => eventSlot(event, previous));
       if (event.kind === "invalidate" || (event.kind === "clear" && event.refetch)) refetch();
     });
-  }, [enabled, epoch, key, refetch, setState]);
+  }, [enabled, epoch, inFlight, key, refetch, retired, setState]);
 }
 
 /**
@@ -128,8 +149,9 @@ function useCacheEvents<T>({ enabled, key, state, epoch, setState, refetch }: Ca
  * 所以先回到加载态并丢掉旧数据,调用方才不会拿着上一次的数字做决定(例如删除确认框在影响面重算完之前继续阻断)。
  * `reload()` 不清数据:列表重试时表格不该先闪成空的。
  *
- * 结果只认最后一次发出的请求:键、`load`、令牌一变,或缓存被清空 / 按前缀失效,上一次在途的响应
- * 落地都会被丢弃。`refreshing && data` 时画面上的数据属于缓存或同一路径的上一个查询串。
+ * 结果只认最后一次发出的请求:键、`load`、令牌一变,或缓存被清空 / 按前缀失效 / 写穿,上一次在途的响应
+ * 落地都会被丢弃;被事件作废的读取还在路上时,同键的下一次读取等它落地再发(不与它合并成同一个 GET)。
+ * `refreshing && data` 时画面上的数据属于缓存或同一路径的上一个查询串。
  * 复查失败:401/403/404 清掉数据与缓存(绝不能继续画已无权看的数据);网络 / 5xx 且带缓存键时
  * 保留数据、只亮 `error`。缓存读写都是深拷贝,调用方就地改自己手里的 `data` 不会污染缓存(但会影响本钩子下一次渲染,仍建议当只读)。
  */
@@ -146,14 +168,21 @@ export function useAsyncData<T>(load: () => Promise<T>, enabled = true, options?
     else if (enabled) setState((previous) => rekeyedSlot(seen.key, key, previous));
   }
   const refetch = useCallback(() => setToken((value) => value + 1), []);
-  useCacheEvents({ enabled, key, state, epoch, setState, refetch });
+  const inFlight = useRef<PendingLoad | null>(null);
+  const retired = useRef<PendingLoad | null>(null);
+  useCacheEvents({ enabled, key, state, epoch, setState, refetch, inFlight, retired });
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
     const startedEpoch = epoch.current;
     const current = () => alive && epoch.current === startedEpoch;
     const startedAt = asyncDataGeneration();
-    load()
+    const blocker = retired.current?.key === key ? retired.current : null;
+    const request = blocker ? blocker.settled.then(() => load()) : load();
+    const pending: PendingLoad = { key, settled: request.then(() => undefined, () => undefined) };
+    inFlight.current = pending;
+    void pending.settled.then(() => { if (inFlight.current === pending) inFlight.current = null; });
+    request
       .then((data) => {
         if (!current()) return;
         if (key) writeAsyncData(key, data, startedAt);
