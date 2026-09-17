@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { primeEnterpriseGeneralSettings, resetEnterpriseGeneralSettings } from "@easy-enterprise/ui/enterprise";
+import { NAV_INTENT_TIMEOUT_MS, NAV_PROGRESS_DELAY_MS } from "@easy-enterprise/ui/shell";
 import type { ShellIdentity } from "../lib/shell-adapter";
 
 /**
@@ -27,24 +28,31 @@ vi.mock("next/link", () => ({
 }));
 vi.mock("../assets/brand/jiefa_logo.webp", () => ({ default: { src: "/logo.webp" } }));
 vi.mock("./antd-provider", () => ({ BlankAntdProvider: ({ children }: { children: unknown }) => children }));
-// EasyUI 的动效组件在这条 vitest 车道上会解析到第二份 react:侧栏 / 顶栏 / 框架换成只保留
-// 宿主接线点(renderLink、面板入口的 testId、通知属性)的替身,验的是本宿主的接法。
+// 侧栏 / 移动端导航 / 顶栏里的动效组件在这条 vitest 车道上会解析到第二份 react,换成替身;
+// 替身保留宿主的全部接线点:renderLink(含 onNavigate)、面板入口 testId 与 `openPanelId`
+// 驱动的子项、移动端抽屉的 `pathKey`。框架(EnterpriseAppFrame / AppShell / NavigationProgress)
+// 不含动效依赖,**用真的**,aria-busy 与进度条因此验的是真实组件。
 vi.mock("@easy-enterprise/ui/shell", async () => {
   const { createElement: h, Fragment } = await import("react");
-  // `useNavIntent` 是纯逻辑(EasyUI 不引 next/*),用真的那份——用例要钉的正是宿主的接法。
-  const { useNavIntent } = await vi.importActual<typeof import("@easy-enterprise/ui/shell")>("@easy-enterprise/ui/shell");
-  type Node = { kind: "link"; link: { key: string; href: string; active: boolean; testId?: string; label: string } } | { kind: "panel"; panel: { id: string; testId?: string; label: string; firstHref: string } };
-  const Nav = ({ model, renderLink, onOpenPanel }: { model: { groups: Array<{ key: string; nodes: Node[] }> }; renderLink: (props: Record<string, unknown>) => unknown; onOpenPanel?: (panel: unknown) => void }) => (sidebarRenders.count += 1) && h("nav", null, model.groups.flatMap((group) => group.nodes.map((node) => node.kind === "link"
-    ? h(Fragment, { key: node.link.key }, renderLink({ href: node.link.href, active: node.link.active, className: "", testId: node.link.testId, onNavigate: () => undefined, children: node.link.label }) as never)
-    : h("button", { key: node.panel.id, type: "button", "data-test-id": node.panel.testId, onClick: () => onOpenPanel?.(node.panel) }, node.panel.label))));
-  return { Sidebar: Nav, MobileNav: () => null, Topbar: ({ brand, actions }: { brand: unknown; actions: unknown }) => h("header", null, brand as never, actions as never), useNavIntent };
+  // `useNavIntent` 与两个时长常量是纯逻辑(EasyUI 不引 next/*),用真的那份——用例要钉的正是宿主的接法。
+  const actual = await vi.importActual<typeof import("@easy-enterprise/ui/shell")>("@easy-enterprise/ui/shell");
+  type Item = { key: string; href: string; active: boolean; testId?: string; label: string };
+  type Node = { kind: "link"; link: Item } | { kind: "panel"; panel: { id: string; testId?: string; label: string; firstHref: string; items: Item[] } };
+  type RenderLink = (props: Record<string, unknown>) => unknown;
+  const leaf = (renderLink: RenderLink, item: Item) => h(Fragment, { key: item.key }, renderLink({ href: item.href, active: item.active, className: "", testId: item.testId, onNavigate: () => undefined, children: item.label }) as never);
+  const Nav = ({ model, renderLink, onOpenPanel, openPanelId }: { model: { groups: Array<{ key: string; nodes: Node[] }> }; renderLink: RenderLink; onOpenPanel?: (panel: unknown) => void; openPanelId?: string | null }) => (sidebarRenders.count += 1) && h("nav", { "data-open-panel": openPanelId ?? undefined }, model.groups.flatMap((group) => group.nodes.map((node) => node.kind === "link"
+    ? leaf(renderLink, node.link)
+    : h("div", { key: node.panel.id },
+      h("button", { type: "button", "data-test-id": node.panel.testId, onClick: () => onOpenPanel?.(node.panel) }, node.panel.label),
+      openPanelId === node.panel.id ? node.panel.items.map((item) => leaf(renderLink, item)) : null,
+    ))));
+  const Mobile = ({ pathKey }: { pathKey?: string }) => h("div", { "data-test-id": "mobile-nav", "data-path-key": pathKey });
+  return { ...actual, Sidebar: Nav, MobileNav: Mobile, Topbar: ({ brand, actions }: { brand: unknown; actions: unknown }) => h("header", null, brand as never, actions as never) };
 });
 vi.mock("@easy-enterprise/ui/enterprise", async (importOriginal) => {
   const { createElement: h } = await import("react");
   return {
     ...(await importOriginal<typeof import("@easy-enterprise/ui/enterprise")>()),
-    // `aria-busy` / `data-pending-label` 照 EasyUI `AppShell` 的接法转发,用例据此确认宿主喂了 pending。
-    EnterpriseAppFrame: ({ topbar, sidebar, children, pending, pendingLabel }: { topbar: unknown; sidebar: unknown; children: unknown; pending?: boolean; pendingLabel?: string }) => h("div", null, topbar as never, h("aside", null, sidebar as never), h("main", { "aria-busy": pending || undefined, "data-pending-label": pendingLabel }, children as never)),
     EnterpriseTopbarActions: ({ notifications }: { notifications?: { items: unknown[]; loading: boolean } }) => h("div", { "data-test-id": "topbar-notifications", "data-count": notifications ? notifications.items.length : -1, "data-loading": String(notifications?.loading ?? false) }),
   };
 });
@@ -105,10 +113,20 @@ function commitRoute(pathname: string) {
   act(() => root.render(<BlankShell locale="zh-CN"><div data-test-id="shell-child">child</div></BlankShell>));
 }
 
-function click(element: HTMLElement | null) {
+function click(element: HTMLElement | null, init: MouseEventInit = {}) {
   // 不用 `element.click()`:mock 的 `next/link` 落成真 `<a href>`,happy-dom 会当成整页跳转。
-  act(() => { element?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); });
+  act(() => { element?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ...init })); });
 }
+
+function byHref(href: string): HTMLElement | null {
+  return container.querySelector<HTMLElement>(`a[href="${href}"]`);
+}
+
+const main = () => container.querySelector("main");
+const current = (element: HTMLElement | null) => element?.getAttribute("aria-current") ?? null;
+const DASHBOARD = "/zh-CN/app";
+const EXAMPLES = "/zh-CN/app/examples/table";
+const SETTINGS_GENERAL = "/zh-CN/app/settings/general";
 
 function byTestId(testId: string): HTMLElement | null {
   return container.querySelector<HTMLElement>(`[data-test-id="${testId}"]`);
@@ -136,33 +154,130 @@ describe("BlankShell navigation prefetch", () => {
 });
 
 describe("BlankShell navigation intent", () => {
+  // 进度条与意图超时都靠定时器,这一组统一用假时钟。
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
   it("marks the clicked entry active before the pathname commits", () => {
     render(identity());
-    expect(byTestId("blank-nav-examples-table")?.getAttribute("aria-current")).toBeNull();
-    expect(byTestId("blank-nav-dashboard")?.getAttribute("aria-current")).toBe("page");
+    expect(current(byTestId("blank-nav-examples-table"))).toBeNull();
+    expect(current(byTestId("blank-nav-dashboard"))).toBe("page");
     click(byTestId("blank-nav-examples-table"));
     // `usePathname()` 还停在旧路由,标记已经挪过去了。
-    expect(route.pathname).toBe("/zh-CN/app");
-    expect(byTestId("blank-nav-examples-table")?.getAttribute("aria-current")).toBe("page");
-    expect(byTestId("blank-nav-dashboard")?.getAttribute("aria-current")).toBeNull();
+    expect(route.pathname).toBe(DASHBOARD);
+    expect(current(byTestId("blank-nav-examples-table"))).toBe("page");
+    expect(current(byTestId("blank-nav-dashboard"))).toBeNull();
   });
 
-  it("marks <main> busy while the navigation is in flight and clears it on commit", () => {
+  // 带修饰键 / 中键的点击不会真导航(Next 的 Link 仍会调 onClick),记了意图就会让标记停在
+  // 错误的条目上直到超时。
+  it("ignores modified and non-primary clicks", () => {
     render(identity());
-    const main = () => container.querySelector("main");
+    click(byTestId("blank-nav-examples-table"), { ctrlKey: true });
+    expect(current(byTestId("blank-nav-examples-table"))).toBeNull();
+    expect(current(byTestId("blank-nav-dashboard"))).toBe("page");
     expect(main()?.getAttribute("aria-busy")).toBeNull();
+    click(byTestId("blank-nav-examples-table"), { button: 1 });
+    expect(current(byTestId("blank-nav-examples-table"))).toBeNull();
+    expect(current(byTestId("blank-nav-dashboard"))).toBe("page");
+    expect(main()?.getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("marks <main> busy and shows the progress rail while the navigation is in flight", () => {
+    render(identity());
+    expect(main()?.getAttribute("aria-busy")).toBeNull();
+    expect(byTestId("nav-progress")?.dataset.state).toBe("idle");
     click(byTestId("blank-nav-examples-table"));
     expect(main()?.getAttribute("aria-busy")).toBe("true");
-    expect(main()?.getAttribute("data-pending-label")).toBe("正在加载");
-    commitRoute("/zh-CN/app/examples/table");
+    // 门槛之前一次都不闪。
+    expect(byTestId("nav-progress")?.getAttribute("role")).toBeNull();
+    act(() => { vi.advanceTimersByTime(NAV_PROGRESS_DELAY_MS); });
+    expect(byTestId("nav-progress")?.getAttribute("role")).toBe("status");
+    expect(byTestId("nav-progress")?.dataset.state).toBe("running");
+    expect(byTestId("nav-progress")?.textContent).toBe("正在加载");
+    commitRoute(EXAMPLES);
     expect(main()?.getAttribute("aria-busy")).toBeNull();
-    expect(byTestId("blank-nav-examples-table")?.getAttribute("aria-current")).toBe("page");
+    expect(current(byTestId("blank-nav-examples-table"))).toBe("page");
+    // 补满 + 淡出之后回 idle。
+    expect(byTestId("nav-progress")?.dataset.state).toBe("done");
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(byTestId("nav-progress")?.dataset.state).toBe("idle");
+  });
+
+  // 移动端抽屉靠 `pathKey` 关闭,必须等路由真的落地——换成意图路径会在点击瞬间关掉。
+  it("keeps the mobile drawer key on the committed pathname", () => {
+    render(identity());
+    expect(byTestId("mobile-nav")?.dataset.pathKey).toBe(DASHBOARD);
+    click(byTestId("blank-nav-examples-table"));
+    expect(byTestId("mobile-nav")?.dataset.pathKey).toBe(DASHBOARD);
+    commitRoute(EXAMPLES);
+    expect(byTestId("mobile-nav")?.dataset.pathKey).toBe(EXAMPLES);
+  });
+
+  it("opens the settings panel and marks its first item before the route commits", () => {
+    render(identity());
+    click(byTestId("blank-nav-settings"));
+    expect(container.querySelector("nav")?.dataset.openPanel).toBe("settings");
+    expect(current(byHref(SETTINGS_GENERAL))).toBe("page");
+    expect(route.pathname).toBe(DASHBOARD);
+    expect(main()?.getAttribute("aria-busy")).toBe("true");
+    commitRoute(SETTINGS_GENERAL);
+    expect(main()?.getAttribute("aria-busy")).toBeNull();
+    expect(container.querySelector("nav")?.dataset.openPanel).toBe("settings");
+    // 点回主区:面板当帧收起,pending 要等新路由落地才清。
+    click(byTestId("blank-nav-dashboard"));
+    expect(container.querySelector("nav")?.dataset.openPanel).toBeUndefined();
+    expect(current(byTestId("blank-nav-dashboard"))).toBe("page");
+    expect(main()?.getAttribute("aria-busy")).toBe("true");
+    commitRoute(DASHBOARD);
+    expect(main()?.getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("lets the latest click win while a navigation is still pending", () => {
+    render(identity());
+    click(byTestId("blank-nav-settings"));
+    expect(current(byHref(SETTINGS_GENERAL))).toBe("page");
+    click(byTestId("blank-nav-examples-table"));
+    expect(current(byTestId("blank-nav-examples-table"))).toBe("page");
+    expect(byHref(SETTINGS_GENERAL)).toBeNull();
+    expect(current(byTestId("blank-nav-dashboard"))).toBeNull();
+    expect(main()?.getAttribute("aria-busy")).toBe("true");
+  });
+
+  // 导航可能落在别处(重定向):意图让位给真实路由,而不是等超时。
+  it("follows the committed path when it is not the clicked one", () => {
+    render(identity());
+    click(byTestId("blank-nav-examples-table"));
+    commitRoute(SETTINGS_GENERAL);
+    expect(main()?.getAttribute("aria-busy")).toBeNull();
+    expect(current(byTestId("blank-nav-examples-table"))).toBeNull();
+    expect(container.querySelector("nav")?.dataset.openPanel).toBe("settings");
+    expect(current(byHref(SETTINGS_GENERAL))).toBe("page");
+  });
+
+  // 导航被中止 / 出错时 `pathname` 永远不变,标记靠安全超时弹回真实路由。
+  it("snaps the marker back to the real route after the intent times out", () => {
+    render(identity());
+    click(byTestId("blank-nav-examples-table"));
+    expect(current(byTestId("blank-nav-examples-table"))).toBe("page");
+    act(() => { vi.advanceTimersByTime(NAV_INTENT_TIMEOUT_MS); });
+    expect(current(byTestId("blank-nav-examples-table"))).toBeNull();
+    expect(current(byTestId("blank-nav-dashboard"))).toBe("page");
+    expect(main()?.getAttribute("aria-busy")).toBeNull();
   });
 
   it("stays idle when the current page is clicked again", () => {
     render(identity());
     click(byTestId("blank-nav-dashboard"));
-    expect(container.querySelector("main")?.getAttribute("aria-busy")).toBeNull();
+    expect(main()?.getAttribute("aria-busy")).toBeNull();
+    expect(current(byTestId("blank-nav-dashboard"))).toBe("page");
+    // 点当前页还会撤掉没落地的旧意图(最后一次点击说了算)。
+    click(byTestId("blank-nav-examples-table"));
+    expect(main()?.getAttribute("aria-busy")).toBe("true");
+    click(byTestId("blank-nav-dashboard"));
+    expect(main()?.getAttribute("aria-busy")).toBeNull();
+    expect(current(byTestId("blank-nav-dashboard"))).toBe("page");
+    expect(current(byTestId("blank-nav-examples-table"))).toBeNull();
   });
 });
 

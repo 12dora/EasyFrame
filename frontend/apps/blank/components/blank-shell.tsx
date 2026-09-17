@@ -6,7 +6,7 @@ import { EnterpriseAppFrame, EnterpriseBrandSlot, EnterpriseConfiguredFooter, En
 import { MotionConfig } from "motion/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type SyntheticEvent } from "react";
 import brandLogo from "../assets/brand/jiefa_logo.webp";
 import { BlankAntdProvider } from "./antd-provider";
 import { enterpriseLogoutAdapter } from "../lib/auth-adapter";
@@ -31,14 +31,22 @@ const NavIntentContext = createContext<(href: string) => void>(() => undefined);
  * 侧栏链接:不随进入视口预取(一屏多个入口会在首屏同时打出多次 RSC 请求),
  * 指针悬停 / 键盘聚焦 / 触摸时才预取 —— 真要点的那一个在点下去之前就开始加载了。
  *
- * 点击时先同步记下导航意图(`onIntent`),侧栏的选中标记因此在路由提交之前就挪过去;
+ * 普通左键点击时先同步记下导航意图(`onIntent`),侧栏的选中标记因此在路由提交之前就挪过去;
  * 这一步必须排在 `onNavigate()`(移动端抽屉关闭等外壳副作用)之前。
+ *
+ * 只认「普通左键点击」:带修饰键(⌘/Ctrl/Shift/Alt)、中键、以及已被 `preventDefault()` 的点击
+ * 都不会真的导航(Next 的 `Link` 仍会调用宿主的 onClick),记了意图 `pathname` 永远不变,
+ * 标记就会在错误的条目上停满 `NAV_INTENT_TIMEOUT_MS`。
  */
 function NavLinkWithIntentPrefetch({ href, active, className, testId, onNavigate, children }: Parameters<RenderNavLink>[0]) {
   const router = useRouter();
   const onIntent = useContext(NavIntentContext);
   const prefetch = () => router.prefetch(href);
-  const onClick = () => { onIntent(href); onNavigate(); };
+  const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    const plain = event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.defaultPrevented;
+    if (plain) onIntent(href);
+    onNavigate();
+  };
   return <Link href={href} prefetch={false} aria-current={active ? "page" : undefined} className={className} data-test-id={testId} onClick={onClick} onMouseEnter={prefetch} onFocus={prefetch} onTouchStart={prefetch}>{children}</Link>;
 }
 
@@ -50,11 +58,11 @@ const renderNavLink: RenderNavLink = (props) => <NavLinkWithIntentPrefetch {...p
  */
 function SettingsEntryPrefetch({ firstHref, children }: { firstHref: string | null; children: ReactNode }) {
   const router = useRouter();
-  const onIntent = (event: SyntheticEvent) => {
+  const prefetchIfSettingsEntry = (event: SyntheticEvent) => {
     if (!firstHref || !(event.target instanceof Element)) return;
     if (event.target.closest(`[data-test-id="${SETTINGS_PANEL_TEST_ID}"]`)) router.prefetch(firstHref);
   };
-  return <div className="contents" onPointerOver={onIntent} onFocus={onIntent}>{children}</div>;
+  return <div className="contents" onPointerOver={prefetchIfSettingsEntry} onFocus={prefetchIfSettingsEntry}>{children}</div>;
 }
 
 type ShellTopbarProps = { locale: Locale; pathname: string; t: ReturnType<typeof messages>; identity: ShellIdentity; brand: ReturnType<typeof resolveEnterpriseBrand>; canSecurity: boolean; canNotifications: boolean };

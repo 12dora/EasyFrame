@@ -46,7 +46,9 @@ export interface NavIntent {
 
 - `onIntent(href)` 只存 href 的**路径部分**（丢掉 `?query` 与 `#hash`），不做 locale 改写
   ——宿主传进来的 href 本来就是本地化过的。
-- **点当前页是空操作**：目标路径等于当前 `pathname` 时不产生 pending（点自己不该转圈）。
+- **点当前页是空操作，而且会撤掉未落地的旧意图**：目标路径等于当前 `pathname` 时不产生 pending
+  （点自己不该转圈）；如果此时还有一次没落地的意图挂着，它也一并作废——**最后一次点击说了算**，
+  那次导航的目标已经不是它了。
 - `pending` 的清除条件：`pathname` 变成任何不同于「记意图那一刻」的值（导航落地了，
   也可能落在重定向目标上），或者 `NAV_INTENT_TIMEOUT_MS = 8000` ms 超时（导航被中止 / 出错，
   标记弹回真实路由）。后退 / 前进会改 `pathname`，因此不需要额外监听 `popstate`。
@@ -97,12 +99,21 @@ pending 落下时补满 + 淡出（~200 ms），动效全走 `theme.css` 的关�
    const NavIntentContext = createContext<(href: string) => void>(() => undefined);
    // NavLinkWithIntentPrefetch 内：
    const onIntent = useContext(NavIntentContext);
-   const onClick = () => { onIntent(href); onNavigate(); };
+   const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
+     const plain = event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.defaultPrevented;
+     if (plain) onIntent(href);
+     onNavigate();
+   };
    ```
 
    宿主也可以改成在外壳里用 `useCallback` 造 `renderNavLink`，两种都行；**顺序不能换**
    （`onNavigate()` 会关移动端抽屉等，先记意图才保证标记在同一帧里挪好）。
    悬停 / 聚焦 / 触摸预取的行为保持不变。
+
+   **只有普通左键点击才记意图**：带修饰键（⌘/Ctrl/Shift/Alt）、中键、`target` 不是 `_self`、
+   以及已被 `preventDefault()` 的点击，Next 的 `Link` **照样会调用宿主的 `onClick`，然后不导航**
+   （新标签页打开 / 交给浏览器默认行为）。这些情况下 `pathname` 永远不变，记了意图就会让标记在
+   一个用户根本没离开的条目上停满 `NAV_INTENT_TIMEOUT_MS = 8000` ms。`onNavigate()` 仍要照常调用。
 
 5. **面板入口（按钮，不是链接）在 `router.push` 之前记意图**：
 
@@ -151,13 +162,16 @@ pending 落下时补满 + 淡出（~200 ms），动效全走 `theme.css` 的关�
 | `components/<host>-shell.tsx` | 上面 1~6 全套；`active` / `activePrefix` / 面板开合的 `pathname` 全换成 `nav.path` |
 | 同上（若有第二个外壳） | EasyLearning 的 `TakingFrame` 之类**共用侧栏的外壳一并接**，不要只改主外壳 |
 | `lib/messages.ts` | 没有「加载中」类文案时按 `shell` 分组补一条，中英各一 |
-| `components/<host>-shell.test.tsx` | 补三条：点击后在 `usePathname()` 翻页之前 `aria-current="page"` 已挪过去；pending 期间 `<main>` 有 `aria-busy`；mock 的 pathname 更新后 pending 清除 |
+| `components/<host>-shell.tsx`（链接 onClick） | **只在普通左键点击时记意图**（`plain` 判定见上）；`onNavigate()` 无条件调用 |
+| `components/<host>-shell.test.tsx` | 补：点击后在 `usePathname()` 翻页之前 `aria-current="page"` 已挪过去；pending 期间 `<main>` 有 `aria-busy`、`[data-test-id="nav-progress"]` 过了 `NAV_PROGRESS_DELAY_MS` 才 `role="status"`；mock 的 pathname 更新后 pending 清除并回 `idle`；**ctrl 点击 / 中键点击不动 `aria-current` 与 `aria-busy`**；**点当前页既不转圈也会撤掉未落地的旧意图**；面板展开与其首项选中；落在非点击目标的路径上时意图让位；`NAV_INTENT_TIMEOUT_MS` 超时后标记弹回 |
+| 单测替身 | **不要替换 `EnterpriseAppFrame`**（`AppShell` / `NavigationProgress` 不引 `motion/react`，用真的才验得到 `aria-busy` 与进度条）；`Sidebar` 替身要透出 `openPanelId` 并在展开时渲染 `panel.items`，`MobileNav` 替身要透出 `pathKey` |
 | `package.json` / pin | `@easy-enterprise/ui` 的 submodule pin 跟到含 `nav-intent.ts` 的提交 |
 
 宿主自己要当心的几处：
 
 - **侧栏 mock 别漏 `onNavigate`**：单测里替身 `Sidebar` 调 `renderLink(...)` 时必须带上
   `onNavigate`，否则新的 `onClick` 会在 `onNavigate()` 上抛。
+- **别把「记意图」提到 `onClick` 之外**（例如 `onPointerDown`）：那样连右键菜单、拖拽都会记一次。
 - **宿主自有的「当前分组」判定**（EasyTrade 的多级面板、EasyCustoms 的 companies 前缀）也属于选中态，
   同样改读 `nav.path`；漏一处就会出现「链接亮了但父级面板没跟着展开」。
 - **外链 / 跨根布局的入口**（整页加载，不是客户端导航）不要记意图：`pathname` 永不变化，
@@ -167,7 +181,8 @@ pending 落下时补满 + 淡出（~200 ms），动效全走 `theme.css` 的关�
 ### 已知不变量（回归时照着看）
 
 - SSR / hydration 首帧与改前一致，`console` 无 hydration 不匹配。
-- 点当前页：没有进度条、没有 `aria-busy`、标记不动。
+- 点当前页：没有进度条、没有 `aria-busy`、标记不动；若当时还有未落地的意图，它被撤销（最后一次点击说了算）。
+- ⌘/Ctrl/Shift/Alt 点击与中键点击（新标签页打开）：`aria-current` 与 `aria-busy` 一动不动。
 - 导航失败 / 被中止：最多 8 s 后标记自己弹回真实路由。
 - 秒开（已预取）的导航：进度条一次都不闪（150 ms 门槛）。
 - 移动端抽屉仍在路由真的变化时才关。
