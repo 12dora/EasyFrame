@@ -597,7 +597,6 @@ def test_auth_me_exposes_server_derived_identity_flags() -> None:
 
 
 def test_auth_me_local_admin_is_not_superadmin_when_local_auth_disabled(monkeypatch) -> None:
-    from blank_app.adapters import account_adapter
     from blank_app.main import app
 
     account_id = _admin_account_id()
@@ -607,7 +606,7 @@ def test_auth_me_local_admin_is_not_superadmin_when_local_auth_disabled(monkeypa
         db.expunge(account)
 
     monkeypatch.setenv("BLANK_LOCAL_AUTH_MODE", "disabled")
-    monkeypatch.setattr(account_adapter, "_authenticated_account", lambda: (account, False))
+    monkeypatch.setattr("blank_app.authz_hotpath.load_authenticated_account", lambda db: (account, False))
     with TestClient(app) as client:
         response = client.get("/api/v1/auth/me")
     assert response.status_code == 200
