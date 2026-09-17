@@ -38,9 +38,10 @@ function loadingSlot<T>(loading: boolean): Slot<T> {
   return { data: null, loading, refreshing: false, error: false, failure: null };
 }
 
-function cachedSlot<T>(key: string | null): Slot<T> | null {
+/** 缓存命中的状态;`readAsyncData` 给的是深拷贝,画面上那份与缓存互不影响。 */
+function cachedSlot<T>(key: string | null, refreshing = true): Slot<T> | null {
   if (!key || !hasAsyncData(key)) return null;
-  return { data: readAsyncData<T>(key) ?? null, loading: false, refreshing: true, error: false, failure: null };
+  return { data: readAsyncData<T>(key) ?? null, loading: false, refreshing, error: false, failure: null };
 }
 
 /** 键的路径部分(`?` / `#` 之前)。 */
@@ -78,16 +79,18 @@ function failedSlot<T>(key: string | null, previous: Slot<T>, cause: unknown): S
  */
 function concerns<T>(event: AsyncDataEvent, key: string | null, current: Slot<T>): boolean {
   if (event.kind === "clear") return true;
+  if (event.kind === "replace") return key === event.key;
   return key !== null && key.startsWith(event.prefix) && !current.error;
 }
 
 function eventSlot<T>(event: AsyncDataEvent, previous: Slot<T>): Slot<T> {
+  if (event.kind === "replace") return cachedSlot<T>(event.key, false) ?? previous;
   if (event.kind === "clear" || previous.data === null) return loadingSlot(true);
   return { ...previous, loading: false, refreshing: true, error: false, failure: null };
 }
 
 /**
- * 缓存被清空 / 失效时,挂着的钩子也要跟上:作废在途响应(`epoch` 递增),改状态,需要时重取。
+ * 缓存被清空 / 失效 / 写穿时,挂着的钩子也要跟上:作废在途响应(`epoch` 递增),改状态,需要时重取。
  * 只看事件,不看全局代号 —— 别的键的写回(write-through)不该让这里的在途请求悬空。
  */
 interface CacheEventWiring<T> {
@@ -109,7 +112,7 @@ function useCacheEvents<T>({ enabled, key, state, epoch, setState, refetch }: Ca
       if (!concerns(event, key, latest.current)) return;
       epoch.current += 1;
       setState((previous) => eventSlot(event, previous));
-      if (event.kind === "invalidate" || event.refetch) refetch();
+      if (event.kind === "invalidate" || (event.kind === "clear" && event.refetch)) refetch();
     });
   }, [enabled, epoch, key, refetch, setState]);
 }
@@ -128,7 +131,7 @@ function useCacheEvents<T>({ enabled, key, state, epoch, setState, refetch }: Ca
  * 结果只认最后一次发出的请求:键、`load`、令牌一变,或缓存被清空 / 按前缀失效,上一次在途的响应
  * 落地都会被丢弃。`refreshing && data` 时画面上的数据属于缓存或同一路径的上一个查询串。
  * 复查失败:401/403/404 清掉数据与缓存(绝不能继续画已无权看的数据);网络 / 5xx 且带缓存键时
- * 保留数据、只亮 `error`。`data` 当作只读:缓存里存的是深拷贝,但画面上那份仍与调用方共享。
+ * 保留数据、只亮 `error`。缓存读写都是深拷贝,调用方就地改自己手里的 `data` 不会污染缓存(但会影响本钩子下一次渲染,仍建议当只读)。
  */
 export function useAsyncData<T>(load: () => Promise<T>, enabled = true, options?: AsyncDataOptions): AsyncData<T> & { refreshing: boolean } {
   const key = options?.cacheKey || null;

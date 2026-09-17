@@ -1,7 +1,8 @@
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearAsyncDataCache, invalidateAsyncData, useAsyncData, type AsyncData } from "./use-async-data";
+import { hasAsyncData } from "./async-data-cache";
+import { clearAsyncDataCache, invalidateAsyncData, replaceAsyncData, useAsyncData, type AsyncData } from "./use-async-data";
 
 /**
  * 只读数据拉取的 stale-while-revalidate(契约 C1)。
@@ -228,6 +229,44 @@ describe("useAsyncData cache events", () => {
     expect(current()).toMatchObject({ data: "after-write", refreshing: false });
   });
 
+  // 写操作后失效:写之前发出的复查既不画也不回写缓存。
+  it("keeps a read started before an invalidation out of the cache", async () => {
+    render({ name: "a" });
+    await settle("a", "before-write");
+    remount({ name: "a" });
+    act(() => invalidateAsyncData("/orders?q=a"));
+    await settle("a", "stale-read", 1);
+    expect(hasAsyncData("/orders?q=a")).toBe(false);
+    expect(current().data).toBe("before-write");
+    await settle("a", "after-write", 2);
+    remount({ name: "a" });
+    expect(frames[0]).toMatchObject({ data: "after-write", refreshing: true });
+  });
+
+  // 写穿:命中缓存、复查在途时写回整份新数据,旧复查落地不能把画面和缓存盖回写之前。
+  it("retires a revalidation in flight when the key is replaced", async () => {
+    render({ name: "a" });
+    await settle("a", "before-write");
+    remount({ name: "a" });
+    expect(current()).toMatchObject({ data: "before-write", refreshing: true });
+    act(() => replaceAsyncData("/orders?q=a", "written"));
+    expect(current()).toMatchObject({ data: "written", loading: false, refreshing: false });
+    await settle("a", "stale-read", 1);
+    expect(current().data).toBe("written");
+    // 写穿不重取。
+    expect(pending.get("a")).toHaveLength(2);
+    remount({ name: "a" });
+    expect(frames[0]).toMatchObject({ data: "written", refreshing: true });
+  });
+
+  it("lets another key's read land after a replace", async () => {
+    render({ name: "a" });
+    act(() => replaceAsyncData("/orders?q=other", "written"));
+    await settle("a", "fresh");
+    expect(current()).toMatchObject({ data: "fresh", loading: false });
+    expect(hasAsyncData("/orders?q=a")).toBe(true);
+  });
+
   // 调用方常在读取失败时顺手失效本资源:失败态不跟着重取,否则就是死循环。
   it("does not refetch a failed hook on invalidation", async () => {
     render({ name: "a" });
@@ -284,12 +323,20 @@ describe("useAsyncData cache safety", () => {
   });
 
   it("stores a copy so in-place mutation cannot poison the cache", async () => {
+    const remountObject = () => {
+      act(() => root.unmount());
+      root = createRoot(container);
+      act(() => root.render(<ObjectProbe />));
+    };
     act(() => root.render(<ObjectProbe />));
     await act(async () => { objectPending?.resolve({ items: ["x"] }); await Promise.resolve(); });
-    objectLatest?.data?.items.push("mutated");
-    act(() => root.unmount());
-    root = createRoot(container);
-    act(() => root.render(<ObjectProbe />));
+    // 首次加载拿到的那份。
+    objectLatest?.data?.items.push("mutated-first-load");
+    remountObject();
+    expect(objectLatest?.data).toEqual({ items: ["x"] });
+    // 命中缓存拿到的那份也不是缓存本体。
+    objectLatest?.data?.items.push("mutated-cache-hit");
+    remountObject();
     expect(objectLatest?.data).toEqual({ items: ["x"] });
   });
 });

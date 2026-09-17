@@ -32,8 +32,8 @@ replaceAsyncData(key: string, value: unknown): void
 
 - **键**：`cacheKey` = 去掉 `/api/v1` 前缀的请求路径 + 查询串（`/notifications?limit=100`、`/orders/<id>`），
   与真实请求同源拼出来，换了参数就换了键。不给键就不缓存（行为同改前）。
-- **存储**：只在模块内存，不落盘，上限 100 条（按最久未写入淘汰）；写入存 `structuredClone`，
-  画面上的 `data` 当只读。
+- **存储**：只在模块内存，不落盘，上限 100 条（按最久未写入淘汰）；写入与命中读取都走 `structuredClone`，
+  调用方就地改手里的 `data` 碰不到缓存本体（仍建议当只读）。
 - **命中**：挂载时有缓存先画缓存（`loading: false`、`refreshing: true`），同时后台复查。
 - **换键**：新键有缓存画缓存；否则**只有路径相同**（只改查询串：筛选 / 翻页）才留着上一份数据标 `refreshing`，
   换了资源（`/orders/A` → `/orders/B`）一律回加载态、`data: null`。
@@ -43,7 +43,9 @@ replaceAsyncData(key: string, value: unknown): void
   响应既不写缓存也不进画面。
 - **写操作之后**：当前视图 `reload()`；其他页面可能过期的键用 `invalidateAsyncData(前缀)`
   （挂着的钩子保留数据后台复查；已在失败态的不自动重取，避免「失败 → 失效 → 重取」死循环）。
-  写接口回传整份新数据时用 `replaceAsyncData(key, value)` 写穿（不递增代号、不发事件）。
+  写接口回传**整份权威新数据**时用 `replaceAsyncData(key, value)` 写穿：不递增代号（别的键照常落地），
+  挂着同一键的钩子改画新数据并作废写之前发出的在途读取。只拿到「删了哪一条」这类局部结果时不要拼一份去写穿
+  ——拼的底稿可能是旧的，用 `invalidateAsyncData(key)`。
 - **换人 / 结束会话**（由身份存储调用，页面不用管）：
   - `writeCachedIdentity` 发现 `accountId` 变了 → `clearAsyncDataCache()`：挂着的钩子丢数据并按新身份重取；
   - `clearCachedIdentity`（登出、被踢、改密完成）→ `clearAsyncDataCache({ refetch: false })`：
@@ -63,7 +65,7 @@ replaceAsyncData(key: string, value: unknown): void
 ## 模板示例
 
 `app/[locale]/app/notifications/page.tsx`：`useAsyncData(loadNotifications, canView, { cacheKey: "/notifications?limit=100" })`，
-点掉通知先乐观隐藏，成功后 `replaceAsyncData` 写回剩余列表，失败 `reload()`。
+点掉通知先乐观隐藏，成功后 `invalidateAsyncData(NOTIFICATIONS_KEY)`（作废点之前发出的复查、后台重取），失败 `reload()`。
 
 ## 宿主接入清单
 

@@ -14,8 +14,11 @@ const entries = new Map<string, unknown>();
 /** 每次清空 / 失效递增;在途请求据此判断自己的结果还能不能写回缓存。 */
 let generation = 0;
 
-/** 挂着的 `useAsyncData` 要知道的缓存事件:整份清空(换人 / 登出),或按前缀失效(写操作之后)。 */
-export type AsyncDataEvent = { readonly kind: "clear"; readonly refetch: boolean } | { readonly kind: "invalidate"; readonly prefix: string };
+/** 挂着的 `useAsyncData` 要知道的缓存事件:整份清空(换人 / 登出)、按前缀失效(写操作之后),或整键写穿。 */
+export type AsyncDataEvent =
+  | { readonly kind: "clear"; readonly refetch: boolean }
+  | { readonly kind: "invalidate"; readonly prefix: string }
+  | { readonly kind: "replace"; readonly key: string };
 
 const listeners = new Set<(event: AsyncDataEvent) => void>();
 
@@ -47,8 +50,9 @@ export function hasAsyncData(key: string): boolean {
   return entries.has(key);
 }
 
+/** 读出一份深拷贝:命中缓存的调用方就地改(排序、splice)也碰不到缓存本体。 */
 export function readAsyncData<T>(key: string): T | undefined {
-  return entries.get(key) as T | undefined;
+  return snapshot(entries.get(key)) as T | undefined;
 }
 
 /**
@@ -94,9 +98,10 @@ export function invalidateAsyncData(prefix: string): void {
 /**
  * 写接口回传了整份新数据时直接写回缓存(write-through)。
  *
- * 不递增代号、不发事件:别的键的在途请求照常落地。同一个键上写之前发出的读请求由调用方
- * 作废(`reload()` 让旧响应失效),否则它落地时仍会把缓存盖回写之前的样子。
+ * 不递增代号:别的键的在途请求照常落地。挂着同一个键的 `useAsyncData` 收到事件,改画这份新数据,
+ * 并作废写之前发出的在途读取 —— 否则旧响应落地会把缓存和画面盖回写之前的样子。
  */
 export function replaceAsyncData(key: string, value: unknown): void {
   writeAsyncData(key, value, generation);
+  emit({ kind: "replace", key });
 }

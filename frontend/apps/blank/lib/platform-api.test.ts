@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PlatformRequestError, platformRequest } from "./platform-api";
+import { BLANK_AUTH_INVALIDATED_EVENT, PlatformRequestError, platformRequest } from "./platform-api";
 
 /**
  * 在途 GET 去重:切页时外壳、页面与 StrictMode 常常同时要同一份数据,一次往返就够了。
@@ -7,12 +7,14 @@ import { PlatformRequestError, platformRequest } from "./platform-api";
  */
 
 const token = vi.hoisted(() => ({ value: null as string | null }));
-vi.mock("./auth-adapter", () => ({ authToken: () => token.value, logout: vi.fn() }));
+const logout = vi.hoisted(() => vi.fn());
+vi.mock("./auth-adapter", () => ({ authToken: () => token.value, logout }));
 
 const fetchMock = vi.fn();
 
 beforeEach(() => {
   token.value = null;
+  logout.mockReset();
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -100,5 +102,48 @@ describe("platformRequest in-flight GET dedupe", () => {
   it("keeps a 204 empty and passes non-GET requests straight through", async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 204, json: async () => { throw new SyntaxError("empty"); } });
     await expect(platformRequest("/api/v1/orders/o1", { method: "DELETE" })).resolves.toBeUndefined();
+  });
+});
+
+/** 401 走会话失效:合并后的调用方只触发一次登出;换过 token 之后旧请求的 401 不踢新会话。 */
+describe("platformRequest 401 with in-flight GET merge", () => {
+  function listenInvalidated(): { count: () => number; stop: () => void } {
+    let seen = 0;
+    const onInvalidated = () => { seen += 1; };
+    window.addEventListener(BLANK_AUTH_INVALIDATED_EVENT, onInvalidated);
+    return { count: () => seen, stop: () => window.removeEventListener(BLANK_AUTH_INVALIDATED_EVENT, onInvalidated) };
+  }
+
+  it("logs out once and rejects every joined caller with the 401", async () => {
+    token.value = "token-a";
+    fetchMock.mockResolvedValue({ ok: false, status: 401, json: async () => ({ detail: "未登录" }) });
+    const invalidated = listenInvalidated();
+    const results = await Promise.all([
+      platformRequest("/api/v1/notifications?limit=100").then(() => "resolved", (cause: unknown) => cause),
+      platformRequest("/api/v1/notifications?limit=100").then(() => "resolved", (cause: unknown) => cause),
+    ]);
+    invalidated.stop();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(invalidated.count()).toBe(1);
+    for (const result of results) {
+      expect(result).toBeInstanceOf(PlatformRequestError);
+      expect((result as PlatformRequestError).status).toBe(401);
+    }
+  });
+
+  it("does not log out when the token rotated while the GET was in flight", async () => {
+    token.value = "token-a";
+    let answer: (value: unknown) => void = () => undefined;
+    fetchMock.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+    const invalidated = listenInvalidated();
+    const stale = platformRequest("/api/v1/notifications?limit=100").catch((cause: unknown) => cause);
+    token.value = "token-b";
+    answer({ ok: false, status: 401, json: async () => ({ detail: "未登录" }) });
+    const result = await stale;
+    invalidated.stop();
+    expect((result as PlatformRequestError).status).toBe(401);
+    expect(logout).not.toHaveBeenCalled();
+    expect(invalidated.count()).toBe(0);
   });
 });
