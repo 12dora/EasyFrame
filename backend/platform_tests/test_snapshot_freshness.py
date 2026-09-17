@@ -57,6 +57,37 @@ def test_expired_after_grace_or_when_invalidated() -> None:
     assert classify_snapshot(fetched, invalid, fetched) is SnapshotFreshness.EXPIRED
 
 
+def test_invalidated_row_is_expired_even_when_now_is_before_fetched_at() -> None:
+    fetched = _at(50)
+    invalid = invalidated_expires_at(fetched)
+    assert classify_snapshot(fetched, invalid, fetched - timedelta(seconds=1)) is SnapshotFreshness.EXPIRED
+
+
+def test_inverted_window_is_expired() -> None:
+    fetched = _at(50)
+    expires = _at(40)
+    assert classify_snapshot(fetched, expires, _at(30)) is SnapshotFreshness.EXPIRED
+    assert classify_snapshot(fetched, expires, _at(45)) is SnapshotFreshness.EXPIRED
+    assert classify_snapshot(fetched, expires, _at(55)) is SnapshotFreshness.EXPIRED
+
+
+def test_naive_datetimes_classify_as_utc() -> None:
+    fetched = datetime(2026, 9, 17, 8, 0)
+    expires = datetime(2026, 9, 17, 8, 1, 40)
+    assert classify_snapshot(fetched, expires, datetime(2026, 9, 17, 8, 1)) is SnapshotFreshness.FRESH
+    assert classify_snapshot(fetched, expires, datetime(2026, 9, 17, 8, 1, 1)) is SnapshotFreshness.NEAR_EXPIRY
+
+
+def test_mixed_naive_and_aware_datetimes_do_not_raise() -> None:
+    fetched_naive = datetime(2026, 9, 17, 8, 0)
+    expires_naive = datetime(2026, 9, 17, 8, 1, 40)
+    now_aware = datetime(2026, 9, 17, 8, 1, tzinfo=UTC)
+    assert classify_snapshot(fetched_naive, expires_naive, now_aware) is SnapshotFreshness.FRESH
+    assert classify_snapshot(_FETCHED, expires_naive, now_aware) is SnapshotFreshness.FRESH
+    assert classify_snapshot(fetched_naive, fetched_naive, now_aware) is SnapshotFreshness.EXPIRED
+    assert classify_snapshot(fetched_naive, _FETCHED, now_aware) is SnapshotFreshness.EXPIRED
+
+
 def test_schedule_dedups_inflight_and_wait_clears() -> None:
     refresher = BackgroundRefresher(max_workers=1, name="authz-refresh-test")
     entered = threading.Event()
@@ -159,3 +190,59 @@ def test_worker_unexpected_exception_logs(caplog) -> None:
     assert refresher.schedule("exc:user", lambda: None) is True
     refresher.wait()
     refresher.shutdown()
+
+
+def test_schedule_returns_false_when_shutdown_races_submit() -> None:
+    refresher = BackgroundRefresher()
+    entered = threading.Event()
+    proceed = threading.Event()
+    real_executor = refresher._executor
+
+    def gated_executor() -> ThreadPoolExecutor:
+        pool = real_executor()
+        entered.set()
+        assert proceed.wait(timeout=5)
+        return pool
+
+    refresher._executor = gated_executor  # type: ignore[method-assign]
+    outcome: dict[str, object] = {}
+
+    def run() -> None:
+        try:
+            outcome["scheduled"] = refresher.schedule("race:user", lambda: None)
+        except Exception as error:
+            outcome["error"] = error
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert entered.wait(timeout=5)
+    refresher.shutdown()
+    proceed.set()
+    worker.join(timeout=5)
+    assert "error" not in outcome
+    assert outcome["scheduled"] is False
+    assert "race:user" not in refresher._inflight
+
+
+def test_shutdown_drops_queued_key_without_waiting_for_running_worker() -> None:
+    occupied = threading.Event()
+    hold = threading.Event()
+
+    def occupy() -> None:
+        occupied.set()
+        assert hold.wait(timeout=5)
+
+    refresher = BackgroundRefresher(max_workers=1, name="authz-shutdown-queue")
+    try:
+        assert refresher.schedule("running:user", occupy) is True
+        assert occupied.wait(timeout=5)
+        queued = "queued:user"
+        assert refresher.schedule(queued, lambda: time.sleep(30)) is True
+        refresher.shutdown()
+        deadline = time.monotonic() + 2
+        while queued in refresher._inflight and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert queued not in refresher._inflight
+    finally:
+        hold.set()
+        refresher.shutdown()

@@ -7,7 +7,7 @@ import threading
 import weakref
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 logger = logging.getLogger(__name__)
@@ -31,11 +31,20 @@ def classify_snapshot(
     near_expiry_ratio: float = NEAR_EXPIRY_RATIO,
     stale_grace: timedelta = STALE_GRACE,
 ) -> SnapshotFreshness:
-    """按剩余寿命与宽限期分类。显式失效须 ``expires_at = fetched_at``,永不进宽限。"""
+    """按剩余寿命与宽限期分类。显式失效须 ``expires_at = fetched_at``,永不进宽限。
 
+    naive datetime 视为 UTC。``expires_at <= fetched_at`` 一律 EXPIRED,
+    即使 ``now < expires_at``(时钟回偏也不能把已吊销行当成 FRESH)。
+    """
+
+    fetched_at = _utc(fetched_at)
+    expires_at = _utc(expires_at)
+    now = _utc(now)
+    if expires_at <= fetched_at:
+        return SnapshotFreshness.EXPIRED
     if now < expires_at:
         return _freshness_before_expiry(fetched_at, expires_at, now, near_expiry_ratio)
-    if expires_at > fetched_at and now < expires_at + stale_grace:
+    if now < expires_at + stale_grace:
         return SnapshotFreshness.STALE_GRACE
     return SnapshotFreshness.EXPIRED
 
@@ -44,6 +53,10 @@ def invalidated_expires_at(fetched_at: datetime) -> datetime:
     """显式失效(catalog.changed、管理员吊销等)把 ``expires_at`` 写成 ``fetched_at``。"""
 
     return fetched_at
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def _freshness_before_expiry(
@@ -77,6 +90,8 @@ class BackgroundRefresher:
             future = self._executor().submit(fn)
         except Exception:
             self._release_key(key)
+            if self._shutdown:
+                return False
             raise
         self._track(future, key)
         return True

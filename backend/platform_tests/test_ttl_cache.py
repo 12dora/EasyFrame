@@ -81,3 +81,81 @@ def test_loader_exception_is_not_cached() -> None:
         box.load(boom)
     assert box.peek() == (False, None)
     assert box.load(lambda: "ok") == "ok"
+
+
+def test_reentrant_loader_does_not_deadlock() -> None:
+    box: TtlBox[str] = TtlBox(ttl_seconds=10)
+
+    def loader() -> str:
+        hit, cached = box.peek()
+        assert hit is False
+        assert cached is None
+        assert box.generation == 0
+        return "ok"
+
+    assert box.load(loader) == "ok"
+    assert box.peek() == (True, "ok")
+
+
+def test_invalidate_during_inflight_load_is_not_cached() -> None:
+    box: TtlBox[str] = TtlBox(ttl_seconds=10)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow() -> str:
+        entered.set()
+        assert release.wait(timeout=5)
+        return "stale"
+
+    results: list[str] = []
+    worker = threading.Thread(target=lambda: results.append(box.load(slow)))
+    worker.start()
+    assert entered.wait(timeout=5)
+    box.invalidate()
+    assert box.peek() == (False, None)
+    release.set()
+    worker.join(timeout=5)
+    assert results == ["stale"]
+    assert box.peek() == (False, None)
+    assert box.load(lambda: "fresh") == "fresh"
+    assert box.peek() == (True, "fresh")
+
+
+def test_loader_exception_wakes_waiter_and_is_not_cached() -> None:
+    box: TtlBox[str] = TtlBox(ttl_seconds=10)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def boom() -> str:
+        entered.set()
+        assert release.wait(timeout=5)
+        raise RuntimeError("db blip")
+
+    errors: list[BaseException] = []
+
+    def leader() -> None:
+        try:
+            box.load(boom)
+        except RuntimeError as error:
+            errors.append(error)
+
+    def waiter() -> None:
+        try:
+            box.load(lambda: "should-not-run")
+        except RuntimeError as error:
+            errors.append(error)
+
+    first = threading.Thread(target=leader)
+    second = threading.Thread(target=waiter)
+    first.start()
+    assert entered.wait(timeout=5)
+    second.start()
+    time.sleep(0.05)
+    release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+    assert len(errors) == 2
+    assert all(str(error) == "db blip" for error in errors)
+    assert box.peek() == (False, None)
+    assert box.load(lambda: "ok") == "ok"
+    assert box.peek() == (True, "ok")

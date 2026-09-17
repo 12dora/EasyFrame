@@ -8,6 +8,7 @@ from contextvars import copy_context
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 
 from enterprise_platform.request_scope import (
@@ -90,6 +91,47 @@ def test_threadpool_worker_mutates_same_dict() -> None:
         assert request_scope() is memo
     finally:
         end_request_scope(token)
+
+
+def test_http_middleware_clears_memo_on_route_exception() -> None:
+    app = FastAPI()
+
+    @app.get("/boom")
+    def boom() -> None:
+        memo = request_scope()
+        assert memo is not None
+        memo["seen"] = True
+        raise RuntimeError("route exploded")
+
+    app.add_middleware(RequestScopeMiddleware)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get("/boom").status_code == 500
+    assert request_scope() is None
+
+
+def test_http_middleware_memo_visible_in_streaming_then_cleared() -> None:
+    app = FastAPI()
+    seen_inside: list[bool] = []
+
+    @app.get("/stream")
+    def stream() -> StreamingResponse:
+        def generate():
+            memo = request_scope()
+            seen_inside.append(memo is not None)
+            if memo is not None:
+                memo["chunk"] = 1
+            yield b"one"
+            yield b"two"
+
+        return StreamingResponse(generate(), media_type="text/plain")
+
+    app.add_middleware(RequestScopeMiddleware)
+    with TestClient(app) as client:
+        response = client.get("/stream")
+        assert response.status_code == 200
+        assert response.content == b"onetwo"
+        assert request_scope() is None
+    assert seen_inside == [True]
 
 
 def test_non_http_scope_is_passthrough() -> None:

@@ -69,25 +69,25 @@ EasyAuth 在用户当前授权或应用权限目录变更后，向下游 `POST /
 | 模块 | 公开 API |
 |---|---|
 | `enterprise_platform.request_scope` | `RequestScopeMiddleware`（纯 ASGI）、`request_scope() -> dict \| None`、`drop_request_memo(*keys)`、`begin_request_scope` / `end_request_scope` |
-| `enterprise_platform.ttl_cache` | `TtlBox(ttl_seconds)`：`peek() -> (hit, value)`、`load(loader)` 锁内单飞、`set(value, *, generation=)`（generation 不匹配则 no-op）、`invalidate()` 丢值并 `generation += 1` |
+| `enterprise_platform.ttl_cache` | `TtlBox(ttl_seconds)`：`peek() -> (hit, value)`、`load(loader)` 单飞（in-flight Future，loader 不持锁；generation 已变则不写入；异常唤醒等待者且不缓存）、`set(value, *, generation=)`（generation 不匹配则 no-op）、`invalidate()` 丢值并 `generation += 1` |
 | `enterprise_platform.authz.snapshot_freshness` | `SnapshotFreshness`、`classify_snapshot`、`invalidated_expires_at`、`BackgroundRefresher`（按模块路径 import，不从 `authz` 包再导出） |
 
 `request_scope()` 在请求外是 `None`。ContextVar 会拷进线程池：调用方只改返回的 dict，不要 `ContextVar.set` 新 dict。
 
 ### 快照新鲜度
 
-`classify_snapshot(fetched_at, expires_at, now, *, near_expiry_ratio=0.40, stale_grace=10min)`（全部 aware datetime）：
+`classify_snapshot(fetched_at, expires_at, now, *, near_expiry_ratio=0.40, stale_grace=10min)`：naive datetime 视为 UTC。`expires_at <= fetched_at`（显式失效或倒置窗口）一律 `EXPIRED`，即使 `now < expires_at`（时钟回偏也不能把已吊销行当成 FRESH）。
 
 | 状态 | 条件 | 宿主请求路径 |
 |---|---|---|
-| `FRESH` | `now < expires_at` 且剩余寿命 ≥ 40% 窗口 | 用行，不打网 |
-| `NEAR_EXPIRY` | `now < expires_at` 且剩余寿命 < `0.40 * (expires_at - fetched_at)` | 用行，后台刷新，key `"{app_key}:{external_user_id}"`，遵守既有失败退避 |
+| `FRESH` | `expires_at > fetched_at` 且 `now < expires_at` 且剩余寿命 ≥ 40% 窗口 | 用行，不打网 |
+| `NEAR_EXPIRY` | `expires_at > fetched_at` 且 `now < expires_at` 且剩余寿命 < `0.40 * (expires_at - fetched_at)` | 用行，后台刷新，key `"{app_key}:{external_user_id}"`，遵守既有失败退避 |
 | `STALE_GRACE` | `now >= expires_at` 且 `expires_at > fetched_at` 且 `now < expires_at + 10min` | 用行的 grants（仍受 catalog floor / `catalog_version` 约束；低于下限的行永不使用），后台刷新；请求不得等 EasyAuth |
-| `EXPIRED` | 其余（含无行） | 同步拉取；失败 fail-closed 为零授权，保留宿主已有 last-good-row |
+| `EXPIRED` | `expires_at <= fetched_at`，或宽限已过，或无行 | 同步拉取；失败 fail-closed 为零授权，保留宿主已有 last-good-row |
 
-**显式失效**（`catalog.changed`、管理员吊销等）必须 `expires_at = fetched_at`（`invalidated_expires_at(fetched_at)`），该行永远不能进宽限。`grant.changed` 仍走既有强制同步刷新。EasyAuth HTTP 拉取期间不得持有 DB session。
+**显式失效**（`catalog.changed`、管理员吊销等）必须 `expires_at = fetched_at`（`invalidated_expires_at(fetched_at)`），该行永远不能进宽限，也不得判为 `FRESH`。`grant.changed` 仍走既有强制同步刷新。EasyAuth HTTP 拉取期间不得持有 DB session。
 
-`BackgroundRefresher(max_workers=2, name="authz-refresh")`：`schedule(key, fn) -> bool` 按 key 去重，已在飞或已 `shutdown` 返回 `False`；done-callback 一律清 key，意外异常 `logger.error(..., exc_info=...)`；已完成 Future 只留 WeakSet 给测试用 `wait(timeout=)`。`shutdown()` 取消未完成任务、不等待。每个 uvicorn worker 各自一份进程内调度，这是预期。
+`BackgroundRefresher(max_workers=2, name="authz-refresh")`：`schedule(key, fn) -> bool` 按 key 去重，已在飞或已 `shutdown`（含 submit 与 shutdown 竞态）返回 `False`、不抛错；done-callback 一律清 key，意外异常 `logger.error(..., exc_info=...)`；已完成 Future 只留 WeakSet 给测试用 `wait(timeout=)`。`shutdown()` 取消未完成任务、不等待。每个 uvicorn worker 各自一份进程内调度，这是预期。
 
 ### `require_permission(..., user=)`
 
