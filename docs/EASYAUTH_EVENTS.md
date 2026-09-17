@@ -100,7 +100,7 @@ def require_permission(code: str, request: Request | None = None, *, user: Curre
     ...
 ```
 
-传入 `user=` 时**不得**再解析当前用户：检查 `code in user.permissions`，写宿主 `authorization.denied` 审计，并 `raise AuthError(403, "缺少权限")`。框架在 port 接受 `user` 时传入已解析用户；旧的 `require_permission(code)` / `(code, request)` 仍可用（拒绝路径可能仍会二次解析）。传入 `permission_dependency_factory` 的宿主行为不变。`create_platform_router(...)` 签名不变。
+传入 `user=` 时**不得**再解析当前用户：检查 `code in user.permissions`，写宿主 `authorization.denied` 审计，并 `raise AuthError(403, "缺少权限")`。权限已在 `user.permissions` 里时装配层直接放行、不调 port；仅拒绝路径才 `require_permission(..., user=)` 写审计。框架只在 port 签名里有显式 `user` 形参时传入已解析用户（`*args, **kwargs` 包装器不算）；旧的 `require_permission(code)` / `(code, request)` 仍可用（拒绝路径可能仍会二次解析）。传入 `permission_dependency_factory` 的宿主行为不变。`create_platform_router(...)` 签名不变。
 
 ### 宿主接入清单
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -23,10 +25,16 @@ NOTIFICATION_VIEW = "notification.center.view"
 class _SpyAccount:
     calls: int = 0
     permissions: list[str] = field(default_factory=lambda: [NOTIFICATION_VIEW])
+    must_change_password: bool = False
 
     def current_user(self) -> CurrentUser:
         self.calls += 1
-        return CurrentUser(id="user-1", name="alice", must_change_password=False, permissions=list(self.permissions))
+        return CurrentUser(
+            id="user-1",
+            name="alice",
+            must_change_password=self.must_change_password,
+            permissions=list(self.permissions),
+        )
 
 
 class _Notifications:
@@ -36,7 +44,7 @@ class _Notifications:
 
 
 def _client(
-    account: _SpyAccount,
+    account: object,
     require_permission: Any,
     *,
     factory: Any = None,
@@ -159,3 +167,142 @@ def test_custom_permission_factory_is_byte_compatible() -> None:
     assert response.status_code == 200, response.text
     assert NOTIFICATION_VIEW in seen
     assert account.calls == 1
+
+
+def test_must_change_password_wins_over_missing_permission() -> None:
+    account = _SpyAccount(permissions=[], must_change_password=True)
+    seen: list[str] = []
+
+    def require_permission(code: str, request: Request | None = None, *, user: CurrentUser | None = None) -> None:
+        del request, user
+        seen.append(code)
+        raise AuthError(403, "缺少权限")
+
+    response = _client(account, require_permission).get("/api/v1/notifications")
+    assert response.status_code == 403
+    assert response.json()["detail"] == {"code": "PASSWORD_CHANGE_REQUIRED"}
+    assert seen == []
+    assert account.calls == 1
+
+
+def test_must_change_password_auth_me_still_200() -> None:
+    account = _SpyAccount(must_change_password=True)
+    seen: list[str] = []
+
+    def require_permission(code: str) -> None:
+        seen.append(code)
+
+    response = _client(account, require_permission).get("/api/v1/auth/me")
+    assert response.status_code == 200, response.text
+    assert response.json()["mustChangePassword"] is True
+    assert seen == []
+
+
+def test_unauthenticated_permission_route_is_401() -> None:
+    class _Guest:
+        def current_user(self) -> CurrentUser:
+            raise AuthError(401, "未登录")
+
+    seen: list[str] = []
+
+    def require_permission(code: str) -> None:
+        seen.append(code)
+        raise AuthError(403, "缺少权限")
+
+    response = _client(_Guest(), require_permission).get("/api/v1/notifications")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "未登录"
+    assert seen == []
+
+
+def test_bound_method_port_denies_with_user_and_audit() -> None:
+    account = _SpyAccount(permissions=[])
+
+    class _Port:
+        def __init__(self) -> None:
+            self.audits: list[str] = []
+
+        def require_permission(
+            self, code: str, request: Request | None = None, *, user: CurrentUser | None = None
+        ) -> None:
+            assert user is not None
+            assert request is not None
+            self.audits.append(code)
+            raise AuthError(403, "缺少权限")
+
+    port = _Port()
+    response = _client(account, port.require_permission).get("/api/v1/notifications")
+    assert response.status_code == 403
+    assert response.json()["detail"] == "缺少权限"
+    assert port.audits == [NOTIFICATION_VIEW]
+
+
+def test_partial_port_denies_with_user_and_audit() -> None:
+    account = _SpyAccount(permissions=[])
+    audits: list[str] = []
+
+    def require_permission(
+        code: str,
+        request: Request | None = None,
+        *,
+        user: CurrentUser | None = None,
+        tag: str = "",
+    ) -> None:
+        assert tag == "partial"
+        assert user is not None
+        assert request is not None
+        audits.append(code)
+        raise AuthError(403, "缺少权限")
+
+    response = _client(account, partial(require_permission, tag="partial")).get("/api/v1/notifications")
+    assert response.status_code == 403
+    assert response.json()["detail"] == "缺少权限"
+    assert audits == [NOTIFICATION_VIEW]
+
+
+def test_explicit_user_keyword_only_port_receives_user() -> None:
+    account = _SpyAccount(permissions=[])
+    seen: list[CurrentUser | None] = []
+
+    def require_permission(code: str, *, user: CurrentUser | None = None) -> None:
+        del code
+        seen.append(user)
+        raise AuthError(403, "缺少权限")
+
+    response = _client(account, require_permission).get("/api/v1/notifications")
+    assert response.status_code == 403
+    assert response.json()["detail"] == "缺少权限"
+    assert seen[0] is not None
+    assert seen[0].id == "user-1"
+
+
+def test_kwargs_wrapper_around_legacy_port_still_denies_and_audits() -> None:
+    account = _SpyAccount(permissions=[])
+    audits: list[str] = []
+
+    def orig(code: str) -> None:
+        audits.append(code)
+        raise AuthError(403, "缺少权限")
+
+    def wrapper(*args: Any, **kwargs: Any) -> None:
+        return orig(*args, **kwargs)
+
+    response = _client(account, wrapper).get("/api/v1/notifications")
+    assert response.status_code == 403
+    assert response.json()["detail"] == "缺少权限"
+    assert audits == [NOTIFICATION_VIEW]
+
+
+def test_host_typeerror_after_audit_is_not_retried() -> None:
+    account = _SpyAccount(permissions=[])
+    audits: list[str] = []
+
+    def require_permission(code: str, request: Request | None = None, *, user: CurrentUser | None = None) -> None:
+        del request, user
+        audits.append(code)
+        raise TypeError("host body failed")
+
+    client = _client(account, require_permission)
+    with pytest.raises(TypeError, match="host body failed"):
+        client.get("/api/v1/notifications")
+    assert audits == [NOTIFICATION_VIEW]

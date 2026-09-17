@@ -151,7 +151,7 @@ class AuthorizationOperationsPort(Protocol):
 
 
 class PermissionCheck(Protocol):
-    """宿主鉴权口。``user`` 已由装配层解析时不得再调 ``current_user``。"""
+    """宿主鉴权口。装配层仅拒绝路径调用；传入 ``user`` 时不得再调 ``current_user``。"""
 
     def __call__(
         self,

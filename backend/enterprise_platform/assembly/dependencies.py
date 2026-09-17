@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+import weakref
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -113,27 +114,92 @@ def _deny_permission(ports: PlatformPorts, code: str, request: Request, user: Cu
 
 
 def _call_require_permission(port: Any, code: str, request: Request, user: CurrentUser) -> None:
-    if _port_accepts_user(port):
-        _call_with_optional_request(port, code, request, user=user)
-        return
-    _call_with_optional_request(port, code, request)
+    """按缓存的签名约定调用;绑定 TypeError 才回退,宿主函数体不得重跑。"""
 
-
-def _call_with_optional_request(port: Any, code: str, request: Request, **kwargs: Any) -> None:
+    convention = _cached_port_convention(port)
     try:
-        port(code, request, **kwargs)
-    except TypeError:
-        port(code, **kwargs)
+        port(code, **_permission_port_kwargs(request, user, convention))
+    except TypeError as exc:
+        fallback = _fallback_without_user(convention, exc)
+        if fallback is None:
+            raise
+        _store_port_convention(port, fallback)
+        port(code, **_permission_port_kwargs(request, user, fallback))
 
 
-def _port_accepts_user(port: Any) -> bool:
+_ACCEPTED_PARAM_KINDS = frozenset({inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY})
+_BINDING_TYPE_ERROR_MARKERS = ("unexpected keyword argument", "positional argument")
+
+
+@dataclass(frozen=True)
+class _PortCallConvention:
+    pass_request: bool
+    pass_user: bool
+
+
+_WEAK_CONVENTIONS: weakref.WeakKeyDictionary[Any, _PortCallConvention] = weakref.WeakKeyDictionary()
+_ID_CONVENTIONS: dict[int, _PortCallConvention] = {}
+
+
+def _permission_port_kwargs(request: Request, user: CurrentUser, convention: _PortCallConvention) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    if convention.pass_request:
+        kwargs["request"] = request
+    if convention.pass_user:
+        kwargs["user"] = user
+    return kwargs
+
+
+def _has_explicit_param(parameters: Mapping[str, inspect.Parameter], name: str) -> bool:
+    param = parameters.get(name)
+    return param is not None and param.kind in _ACCEPTED_PARAM_KINDS
+
+
+def _inspect_port_convention(port: Any) -> _PortCallConvention:
     try:
         parameters = inspect.signature(port).parameters
     except (TypeError, ValueError):
+        return _PortCallConvention(pass_request=False, pass_user=False)
+    return _PortCallConvention(
+        pass_request=_has_explicit_param(parameters, "request"),
+        pass_user=_has_explicit_param(parameters, "user"),
+    )
+
+
+def _lookup_port_convention(port: Any) -> _PortCallConvention | None:
+    try:
+        return _WEAK_CONVENTIONS.get(port)
+    except TypeError:
+        return _ID_CONVENTIONS.get(id(port))
+
+
+def _store_port_convention(port: Any, convention: _PortCallConvention) -> None:
+    try:
+        _WEAK_CONVENTIONS[port] = convention
+    except TypeError:
+        _ID_CONVENTIONS[id(port)] = convention
+
+
+def _cached_port_convention(port: Any) -> _PortCallConvention:
+    cached = _lookup_port_convention(port)
+    if cached is not None:
+        return cached
+    convention = _inspect_port_convention(port)
+    _store_port_convention(port, convention)
+    return convention
+
+
+def _is_binding_type_error(exc: TypeError) -> bool:
+    if not any(marker in str(exc) for marker in _BINDING_TYPE_ERROR_MARKERS):
         return False
-    if "user" in parameters:
-        return True
-    return any(item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values())
+    traceback = exc.__traceback__
+    return traceback is not None and traceback.tb_next is None
+
+
+def _fallback_without_user(convention: _PortCallConvention, exc: TypeError) -> _PortCallConvention | None:
+    if not convention.pass_user or not _is_binding_type_error(exc):
+        return None
+    return _PortCallConvention(pass_request=convention.pass_request, pass_user=False)
 
 
 @dataclass(frozen=True)
