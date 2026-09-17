@@ -61,6 +61,8 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   output: "standalone",
   transpilePackages: ["@easy-enterprise/ui"],
+  // 这几个包都从大桶(barrel)导出:只编译真正用到的模块,首个页面的 JS 解析量随之变小。
+  experimental: { optimizePackageImports: ["antd", "@easy-enterprise/ui", "dayjs"] },
   turbopack: { root: resolve(projectRoot, "../..") },
   async rewrites() {
     return [

@@ -85,6 +85,30 @@ sessionStorage 只是给下一次页面加载留的底稿。
 `lib/identity-cache.test.ts` 的 `endLocalSession` 一组用例把这四条钉住了（包括「401 那一路的
 `logout()` 不碰快照」），复制到宿主后不要删。
 
+## 导航速度：外壳路由与外壳组件的约束
+
+来源同为 EasyLearning（`perf(shell)` e04df7e、6ac94e6、94d7845），身份快照解决「首屏」，这几条解决「点侧栏」。
+
+- **外壳内不加 `loading.tsx`**（`app/[locale]/app/**`）：React 19 的 Suspense 揭示节流会让每次侧栏导航
+  至少挂约 300 ms 骨架屏，哪怕 RSC 与缓存数据几十毫秒就到。导航期间保留旧页，各页自己画加载态
+  （`useAsyncData` 的 `loading` / 表格覆盖层）。
+- **外壳内的 `page.tsx` 不包非 `null` 的 `<Suspense fallback>`**：页面级边界在客户端导航加载页面代码块时
+  先提交骨架屏，吃同样的节流。公开路由（登录页）不受此限。
+- **外壳段 `app/[locale]/app/layout.tsx` 设 `export const dynamic = "force-dynamic"`**：`useSearchParams`
+  在服务端就拿到真实查询串、不退回客户端渲染，页面因此不需要 Suspense 边界。
+- **业务树上不调 `headers()`**：`<html lang>` 由 `app/[locale]/layout.tsx` 按路由参数给出（`[locale]` 是根布局）。
+  不带语言段的页面（`/`、`/login/oidc-complete`）放在 `app/(bare)/`，只有那个根布局读中间件写入的
+  `x-enterprise-locale`。两个根布局之间跳转是整页加载，这几页本来就是整页进出。
+- **侧栏链接按意图预取**（`components/blank-shell.tsx`）：`Link prefetch={false}`，`mouseenter` / `focus` /
+  `touchstart` 时 `router.prefetch(href)`；设置入口是 EasyUI 的按钮，外层按 `data-test-id="blank-nav-settings"`
+  事件委托预取它的第一页。
+- **通知状态只在顶栏**（`components/use-shell-notifications.ts`）：`useShellNotifications` 只在 `ShellTopbar`
+  里调用，加载态翻转不重画外壳、侧栏与页面；首次拉取排到 `scheduleWhenIdle`。
+- **`next.config.ts`**：`experimental.optimizePackageImports: ["antd", "@easy-enterprise/ui", "dayjs"]`
+  （宿主有其它大桶导出的包，如 `recharts`，一并加上）。
+
+`components/blank-shell.test.tsx` 钉住预取与通知隔离，`components/use-shell-notifications.test.tsx` 钉住钩子本身。
+
 ## 宿主接入清单（EasyTrade / EasyCustoms / EasyLearning）
 
 ### 对照模板 diff 这些文件
@@ -97,6 +121,12 @@ sessionStorage 只是给下一次页面加载留的底稿。
 | `components/use-shell-identity.ts` | **整份新增**（宿主若已有同名钩子则按此重写）；`BLANK_AUTH_INVALIDATED_EVENT`、登录路径、强制改密路径按本宿主改 |
 | `components/blank-shell.tsx` | 三个 effect（身份 / session / auth-invalidated）整体换成 `useShellIdentity`；`permissionRequestUrl` 改读 `identity.permissionRequestUrl`；引导页门禁改 `onboardingReady`；`onRecheck` 改 `refreshIdentity` |
 | `app/…/settings/security/page.tsx`、`app/…/settings/security/password/page.tsx` | `clearLocalSession: logout` → `clearLocalSession: endLocalSession` |
+| `app/layout.tsx` → `app/(bare)/layout.tsx`；`app/page.tsx`、`app/login/oidc-complete/page.tsx` 同搬进 `(bare)` | 唯一保留 `headers()` 的根布局，只服务无语言段页面 |
+| `app/[locale]/layout.tsx` | 持有 `<html lang={localeOf(params.locale)}>` + `<body>` + `Toaster`，并 import `globals.css` |
+| `app/[locale]/app/layout.tsx` | `export const dynamic = "force-dynamic"` |
+| `components/use-shell-notifications.ts` | **整份新增**；`blank-shell.tsx` 删掉通知 state，改由 `ShellTopbar` 调用 |
+| `components/blank-shell.tsx`（导航） | `renderNavLink` 用 `prefetch={false}` + 意图预取；设置面板加 `testId` 与 `SettingsEntryPrefetch` |
+| `next.config.ts` | `experimental.optimizePackageImports` |
 | `vitest.config.ts` | `environment` 改 `happy-dom`（快照住在 sessionStorage，钩子用例要挂真实 React 根）；`include` 加 `components/**` |
 | `lib/identity-cache.test.ts`、`components/use-shell-identity.test.tsx`、`lib/shell-adapter.test.ts` | 新增 / 补用例 |
 
@@ -110,6 +140,12 @@ sessionStorage 只是给下一次页面加载留的底稿。
   就不再和列表请求抢；**401 恢复不等这个窗口**（`revalidateSession` 要能提前打开并把这一次复查排队结算）。
 - **凭据 key**：`AUTH_TOKEN_STORAGE_KEY` 必须等于本宿主真正写进 `localStorage` 的那个 key。
 - **`CACHE_KEY` 每个宿主独立**，且 `CACHE_VERSION` 在 `ShellIdentity` 字段变动时 +1。
+- **删掉外壳内的 `loading.tsx` 与页面级 `<Suspense fallback>`**：EasyCustoms 的 `app/[locale]/app/companies/**/loading.tsx`、
+  EasyTrade 的 `admin/loading.tsx` 都是同一类；外壳段布局补 `force-dynamic` 后页面也不再需要 Suspense 边界。
+  登录等公开页的 Suspense 骨架屏保留。
+- **根布局别读 `headers()`**：确认 `<html>` 在 `[locale]` 布局里；无语言段的回调页（含 EasyLearning 的
+  `login/oidc-silent`）归到 `(bare)` 根布局，`headers()` 只留那里。
+- **侧栏预取与通知隔离**照上一节接；宿主自己的侧栏入口按钮同样要事件委托预取。
 - **共用同一份身份加载的其它外壳**（EasyLearning 的 `TakingFrame`）跟着改用同一个钩子，不要另起一份。
 
 ### 与 EasyLearning 当前实现的三点差异（回流时一并修）
