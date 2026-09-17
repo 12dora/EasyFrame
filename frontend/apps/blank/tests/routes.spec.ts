@@ -248,10 +248,23 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await page.waitForTimeout(100);
     await expect(page.getByRole("button", { name: settingsLabel })).toBeVisible();
   });
-  test("mobile title uses the active settings leaf", async ({ page }) => {
+  // 手机上只剩一条头部栏:汉堡在顶栏里,旧的分区栏(与它的当前分区标题)整条去掉;
+  // 页脚也从页面底部挪进抽屉。见 docs/SHELL_MOBILE.md。
+  test("mobile keeps one header bar and moves the footer into the drawer", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`/${locale}/app/settings/security/password`);
-    await expect(page.locator('[data-test-id="admin-mobile-nav-current"]')).toHaveText(locale === "en" ? "Security" : "安全");
+    await expect(page.locator('[data-test-id="admin-mobile-nav"]')).toHaveCount(0);
+    await expect(page.locator('[data-test-id="admin-mobile-nav-current"]')).toHaveCount(0);
+    // 页面底部那一份页脚仍在 DOM 里(框架照常收 footer),手机上由 `hidden md:block` 收起。
+    await expect(page.locator('[data-test-id="app-footer-html"]')).toBeHidden();
+    const trigger = page.locator('[data-test-id="admin-mobile-nav-trigger"]');
+    await expect(trigger).toBeVisible();
+    await trigger.click();
+    const drawer = page.locator('[data-test-id="admin-mobile-nav-drawer"]');
+    await expect(drawer).toBeVisible();
+    await expect(drawer.locator('[data-test-id="app-footer-html-inline"]')).toContainText(locale === "en" ? "Enterprise framework" : "企业框架");
+    await expect(drawer.locator("footer")).toHaveCount(0);
+    await expect(drawer.locator('[data-test-id="blank-nav-settings"]')).toBeVisible();
   });
   test("access and upstream copy stays complete in the selected locale", async ({ page }) => {
     await page.goto(`/${locale}/app/settings/access`);

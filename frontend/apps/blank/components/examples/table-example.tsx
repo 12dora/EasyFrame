@@ -8,7 +8,9 @@
  * 它只为演示共享的列表页约定,不是业务代码:
  *   - 一张表只有一份查询状态,住在地址栏(深链、刷新、前进后退还原同一屏);
  *   - 搜索 / 筛选 / 排序全部在表头,表格上方不放工具条;
- *   - 分页走服务端,`table.listParams` 直接喂给列表接口。
+ *   - 分页走服务端,`table.listParams` 直接喂给列表接口;
+ *   - 手机(< md)上同一份列定义自动换成卡片列表:标题列标 `mobile: "title"`,
+ *     卡片工具条的四句文案走 `labels.cards`(见 `exampleColumns` 与 docs/SHELL_MOBILE.md)。
  *
  * 真实页面与这里唯一的区别:`page` 来自接口而不是内存里的假数据——
  * `useEffect(() => { void load(table.listParams); }, [table.listParams])`。
@@ -18,7 +20,7 @@
 import { InlineNotice, PageHeader } from "@easy-enterprise/ui";
 import { DataTable, filterColumn, searchColumn, sortColumn, withEllipsis } from "@easy-enterprise/ui/table";
 import { useMemo } from "react";
-import { useTableQuery, type Page, type TableQueryConfig } from "../../lib/table-query";
+import { useTableQuery, type Page, type TableQueryConfig, type TableQueryState } from "../../lib/table-query";
 import { localeOf, messages, type Locale } from "../../lib/messages";
 
 interface ExampleRow {
@@ -61,33 +63,7 @@ export function TableExample({ locale: rawLocale }: { locale: string }) {
   const table = useTableQuery(CONFIG);
   const page = useMemo(() => fakePage(table.listParams), [table.listParams]);
 
-  const columns = useMemo(
-    () => [
-      sortColumn(
-        withEllipsis(
-          searchColumn<ExampleRow>(
-            { title: t.examples.columns.name, dataIndex: "name" },
-            { param: "q", query: table.query, labels: t.examples.table, placeholder: t.examples.columns.name },
-          ),
-          260,
-        ),
-        "name",
-        table.query,
-      ),
-      filterColumn<ExampleRow>(
-        {
-          title: t.examples.columns.status,
-          dataIndex: "status",
-          width: 140,
-          render: (_value: unknown, row: ExampleRow) => t.examples.status[row.status],
-        },
-        { param: "status", query: table.query, options: statusOptions(t), labels: t.examples.table },
-      ),
-      withEllipsis<ExampleRow>({ title: t.examples.columns.owner, dataIndex: "owner" }, 200),
-      sortColumn<ExampleRow>({ title: t.examples.columns.updatedAt, width: 160 }, "updatedAt", table.query),
-    ],
-    [t, table.query],
-  );
+  const columns = useMemo(() => exampleColumns(t, table.query), [t, table.query]);
 
   return (
     <div data-test-id="examples-table-page">
@@ -105,6 +81,46 @@ export function TableExample({ locale: rawLocale }: { locale: string }) {
       </div>
     </div>
   );
+}
+
+/**
+ * 列定义(抽成纯函数,单测直接钉住列的形状,不用挂整张表)。
+ *
+ * 列上的 `mobile` 标记是手机卡片列表(`< md` 自动切换)读的:
+ *   - `mobile: "title"` —— 这一列当卡片的标题行。不标就取排序后的第一列,而那未必还是
+ *     那个「名字」,所以有名字列的表一律显式标上;
+ *   - `mobile: "hidden"` —— 这一列在手机上整行不出现。留给桌面上有位置、手机上只是噪声的列
+ *     (ID / 编码、创建人、以及已经有另一个日期时的创建时间);一张卡片的定义表 ≤ 4 行才读得动。
+ * 标记写在最里层的列字面量上,一路穿过 `searchColumn` / `withEllipsis` / `sortColumn`
+ * 这些装饰器(它们收发的都是 `MobileColumn`);桌面表格对它完全无感。
+ *
+ * 这张示例表只有四列,标题行之外正好三行定义表,所以没有该藏的列。
+ */
+export function exampleColumns(t: ReturnType<typeof messages>, query: TableQueryState) {
+  return [
+    sortColumn(
+      withEllipsis(
+        searchColumn<ExampleRow>(
+          { title: t.examples.columns.name, dataIndex: "name", mobile: "title" },
+          { param: "q", query, labels: t.examples.table, placeholder: t.examples.columns.name },
+        ),
+        260,
+      ),
+      "name",
+      query,
+    ),
+    filterColumn<ExampleRow>(
+      {
+        title: t.examples.columns.status,
+        dataIndex: "status",
+        width: 140,
+        render: (_value: unknown, row: ExampleRow) => t.examples.status[row.status],
+      },
+      { param: "status", query, options: statusOptions(t), labels: t.examples.table },
+    ),
+    withEllipsis<ExampleRow>({ title: t.examples.columns.owner, dataIndex: "owner" }, 200),
+    sortColumn<ExampleRow>({ title: t.examples.columns.updatedAt, width: 160 }, "updatedAt", query),
+  ];
 }
 
 function statusOptions(t: ReturnType<typeof messages>) {

@@ -65,13 +65,13 @@ function SettingsEntryPrefetch({ firstHref, children }: { firstHref: string | nu
   return <div className="contents" onPointerOver={prefetchIfSettingsEntry} onFocus={prefetchIfSettingsEntry}>{children}</div>;
 }
 
-type ShellTopbarProps = { locale: Locale; pathname: string; t: ReturnType<typeof messages>; identity: ShellIdentity; brand: ReturnType<typeof resolveEnterpriseBrand>; canSecurity: boolean; canNotifications: boolean };
+type ShellTopbarProps = { locale: Locale; pathname: string; t: ReturnType<typeof messages>; identity: ShellIdentity; brand: ReturnType<typeof resolveEnterpriseBrand>; canSecurity: boolean; canNotifications: boolean; leading?: ReactNode };
 
 /** 顶栏 + 通知状态:通知数据的每次变化只重画这一层,不牵动外壳与页面。 */
-function ShellTopbar({ locale, pathname, t, identity, brand, canSecurity, canNotifications }: ShellTopbarProps) {
+function ShellTopbar({ locale, pathname, t, identity, brand, canSecurity, canNotifications, leading }: ShellTopbarProps) {
   const router = useRouter(); const href = (path: string) => `/${locale}${path}`;
   const notifications = useShellNotifications(canNotifications, href("/app/notifications"), identity.accountId);
-  return <Topbar brand={
+  return <Topbar leading={leading} brand={
     <EnterpriseBrandSlot href={href("/app")} title={brand.title} subtitle={brand.subtitle} logoSrc={brand.logoSrc} testId="app-brand" renderLink={({ href: target, className, children: label, testId }) => <Link href={target} className={className} data-test-id={testId}>{label}</Link>}/>
   } actions={<EnterpriseTopbarActions pathKey={pathname} locale={locale} localeOptions={[{ code: "zh-CN", label: "中文" }, { code: "en", label: "English" }]} onLocaleChange={(next) => router.replace(localizedLocation(pathname, locale, String(next)))} labels={t.shell} notifications={notifications} user={{ name: identity.name, identity: identity.identity, avatarUrl: identity.avatarUrl, permissionSummary: t.common.permissionCount(identity.permissions.size) }} securityHref={canSecurity ? href("/app/settings/security") : undefined} renderLink={({ href: target, className, testId, role, children: label }) => <Link href={target} className={className} data-test-id={testId} role={role}>{label}</Link>} onLogout={() => performEnterpriseLogout(enterpriseLogoutAdapter, () => router.replace(`/${locale}/logged-out`))}/>} />;
 }
@@ -96,7 +96,12 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
   // 通用设置由共享缓存供给：顶栏、页脚与设置页共用一次公开 GET，保存后立即重刷。
   const { settings } = useEnterpriseGeneralSettings(loadGeneralSettings);
   const brand = resolveEnterpriseBrand(settings, locale, { title: t.brand, subtitle: null, logoSrc: brandLogo.src });
-  const footer = <EnterpriseConfiguredFooter html={resolveEnterpriseFooterHtml(settings, locale)} fallback={<>{t.public.footer} · © {new Date().getFullYear()}</>}/>;
+  // 页脚要传两遍:框架的页脚包裹层在手机上是 `hidden md:block`,手机那一份由导航抽屉底部承载。
+  // 抽屉里用 `bare`(抽屉本身是 role="dialog",再嵌一个 <footer> 会多出一个 contentinfo 地标)。
+  const footerHtml = resolveEnterpriseFooterHtml(settings, locale);
+  const footerFallback = <>{t.public.footer} · © {new Date().getFullYear()}</>;
+  const footer = <EnterpriseConfiguredFooter html={footerHtml} fallback={footerFallback}/>;
+  const drawerFooter = <EnterpriseConfiguredFooter bare html={footerHtml} fallback={footerFallback}/>;
   const href = useCallback((path: string) => `/${locale}${path}`, [locale]); const active = useCallback((path: string) => nav.path === href(path), [href, nav.path]); const activePrefix = useCallback((path: string) => nav.path === href(path) || nav.path.startsWith(`${href(path)}/`), [href, nav.path]);
   const canSecurity = Boolean(identity && Object.values(identity.securityCapabilities).some(Boolean));
   const model: NavModel = useMemo(() => {
@@ -121,7 +126,10 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
   const openPanel = (next: NavPanel) => { nav.onIntent(next.firstHref); setPanel(next.id); router.push(next.firstHref); };
   const loading = <main className="mx-auto w-full max-w-6xl p-6" data-test-id="blank-auth-loading"><PageLoadingSkeleton/></main>;
   if (!identity) return loading;
-  const topbar = <ShellTopbar locale={locale} pathname={pathname} t={t} identity={identity} brand={brand} canSecurity={canSecurity} canNotifications={canNotifications}/>;
+  // 强制改密壳没有导航模型可进(那一页只能改密码),顶栏不带 `leading`;
+  // 应用框架那一份在下面补上手机汉堡。
+  const topbarProps = { locale, pathname, t, identity, brand, canSecurity, canNotifications };
+  const topbar = <ShellTopbar {...topbarProps}/>;
   const forcedTarget = `/${locale}/app/settings/security/password`;
   // antd 环境只包一层,受保护内容与强制改密页共用同一个 provider。
   const content = <BlankAntdProvider locale={locale}>{children}</BlankAntdProvider>;
@@ -141,7 +149,10 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
     );
   }
   const openPanelId = inSettings ? panel : null;
-  return <BlankShellIdentityContext.Provider value={identity}><NavIntentContext.Provider value={nav.onIntent}><MotionConfig reducedMotion="user"><EnterpriseAppFrame pending={nav.pending} pendingLabel={t.common.loading} topbar={topbar} sidebar={<SettingsEntryPrefetch firstHref={settingsFirstHref(model)}><Sidebar model={model} openPanelId={openPanelId} onOpenPanel={openPanel} onBack={() => setPanel(null)} renderLink={renderNavLink} backLabel={t.navigation.backToMain} navLabel={t.navigation.menu}/></SettingsEntryPrefetch>} mobileNav={<MobileNav model={model} renderLink={renderNavLink} backLabel={t.navigation.backToMain} menuLabel={t.navigation.menu} closeLabel={t.navigation.close} navLabel={t.navigation.menu} pathKey={pathname}/>} footer={footer} mainClassName="pb-12">{content}</EnterpriseAppFrame></MotionConfig></NavIntentContext.Provider></BlankShellIdentityContext.Provider>;
+  // 手机上只留一条头部栏:汉堡按钮进 `Topbar` 的 `leading` 槽(`variant="trigger"`),
+  // 框架不再收 `mobileNav`(分区栏整条去掉,正文从 114px 提到 57px 开始);页脚见 docs/SHELL_MOBILE.md。
+  const mobileNav = <MobileNav variant="trigger" model={model} renderLink={renderNavLink} backLabel={t.navigation.backToMain} menuLabel={t.navigation.menu} closeLabel={t.navigation.close} navLabel={t.navigation.menu} pathKey={pathname} footer={drawerFooter}/>;
+  return <BlankShellIdentityContext.Provider value={identity}><NavIntentContext.Provider value={nav.onIntent}><MotionConfig reducedMotion="user"><EnterpriseAppFrame pending={nav.pending} pendingLabel={t.common.loading} topbar={<ShellTopbar {...topbarProps} leading={mobileNav}/>} sidebar={<SettingsEntryPrefetch firstHref={settingsFirstHref(model)}><Sidebar model={model} openPanelId={openPanelId} onOpenPanel={openPanel} onBack={() => setPanel(null)} renderLink={renderNavLink} backLabel={t.navigation.backToMain} navLabel={t.navigation.menu}/></SettingsEntryPrefetch>} footer={footer} mainClassName="pb-6 md:pb-12">{content}</EnterpriseAppFrame></MotionConfig></NavIntentContext.Provider></BlankShellIdentityContext.Provider>;
 }
 
 function localizedLocation(pathname: string, locale: string, nextLocale: string) {

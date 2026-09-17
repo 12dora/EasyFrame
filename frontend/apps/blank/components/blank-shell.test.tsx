@@ -46,8 +46,9 @@ vi.mock("@easy-enterprise/ui/shell", async () => {
       h("button", { type: "button", "data-test-id": node.panel.testId, onClick: () => onOpenPanel?.(node.panel) }, node.panel.label),
       openPanelId === node.panel.id ? node.panel.items.map((item) => leaf(renderLink, item)) : null,
     ))));
-  const Mobile = ({ pathKey }: { pathKey?: string }) => h("div", { "data-test-id": "mobile-nav", "data-path-key": pathKey });
-  return { ...actual, Sidebar: Nav, MobileNav: Mobile, Topbar: ({ brand, actions }: { brand: unknown; actions: unknown }) => h("header", null, brand as never, actions as never) };
+  const Mobile = ({ pathKey, variant }: { pathKey?: string; variant?: string }) => h("div", { "data-test-id": "mobile-nav", "data-path-key": pathKey, "data-variant": variant });
+  // 顶栏替身要渲染 `leading`:手机汉堡就住在那个槽里(真实形态见 blank-shell.mobile.test.tsx)。
+  return { ...actual, Sidebar: Nav, MobileNav: Mobile, Topbar: ({ brand, actions, leading }: { brand: unknown; actions: unknown; leading: unknown }) => h("header", null, leading as never, brand as never, actions as never) };
 });
 vi.mock("@easy-enterprise/ui/enterprise", async (importOriginal) => {
   const { createElement: h } = await import("react");
@@ -207,6 +208,9 @@ describe("BlankShell navigation intent", () => {
   // 移动端抽屉靠 `pathKey` 关闭,必须等路由真的落地——换成意图路径会在点击瞬间关掉。
   it("keeps the mobile drawer key on the committed pathname", () => {
     render(identity());
+    // 手机上只剩一条头部栏:导航是顶栏 leading 槽里的汉堡(trigger),不再是独立分区栏。
+    expect(byTestId("mobile-nav")?.dataset.variant).toBe("trigger");
+    expect(byTestId("mobile-nav")?.closest("header")).not.toBeNull();
     expect(byTestId("mobile-nav")?.dataset.pathKey).toBe(DASHBOARD);
     click(byTestId("blank-nav-examples-table"));
     expect(byTestId("mobile-nav")?.dataset.pathKey).toBe(DASHBOARD);

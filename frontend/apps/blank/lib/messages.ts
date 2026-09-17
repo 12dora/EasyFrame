@@ -51,8 +51,12 @@ const exampleMessages = {
     notice: "模板示例。接入真实列表页后,删掉 app/[locale]/app/examples、components/examples 与本文案块。",
     columns: { name: "名称", status: "状态", owner: "负责人", updatedAt: "更新时间" },
     status: { active: "在用", paused: "暂停", archived: "已归档" },
-    /** `DataTableLabels`:表头下拉、排序提示、空态与每页条数,一张表一份。 */
-    table: { search: "搜索", reset: "重置", filter: "筛选", sortAsc: "升序排列", sortDesc: "降序排列", empty: "没有符合条件的数据", pageSize: "条/页" },
+    /**
+     * `DataTableLabels`:表头下拉、排序提示、空态与每页条数,一张表一份。
+     * `cards` 是手机卡片列表(< md 自动切换)工具条专有的四句;EasyUI 的缺省值就是中文,
+     * 这里仍显式写一遍 —— 双语宿主的两套文案摆在一起才看得出哪句漏了。
+     */
+    table: { search: "搜索", reset: "重置", filter: "筛选", sortAsc: "升序排列", sortDesc: "降序排列", empty: "没有符合条件的数据", pageSize: "条/页", cards: { sort: "排序", all: "全部", selectAll: "全选本页", select: "选择" } },
   },
   en: {
     navLabel: "Example: table",
@@ -61,6 +65,6 @@ const exampleMessages = {
     notice: "Template sample. Delete app/[locale]/app/examples, components/examples and this messages block once the app has a real list page.",
     columns: { name: "Name", status: "Status", owner: "Owner", updatedAt: "Updated" },
     status: { active: "Active", paused: "Paused", archived: "Archived" },
-    table: { search: "Search", reset: "Reset", filter: "Filter", sortAsc: "Sort ascending", sortDesc: "Sort descending", empty: "No matching rows", pageSize: "/ page" },
+    table: { search: "Search", reset: "Reset", filter: "Filter", sortAsc: "Sort ascending", sortDesc: "Sort descending", empty: "No matching rows", pageSize: "/ page", cards: { sort: "Sort", all: "All", selectAll: "Select all on this page", select: "Select" } },
   },
 } as const;
