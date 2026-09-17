@@ -2,7 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/** 顶栏通知钩子:空闲后首拉、无权限不拉、乐观忽略失败时重拉。 */
+/** 顶栏通知钩子:空闲后首拉、无权限不拉、乐观忽略失败时重拉、换人 / 关权限清空。 */
 
 const { loadNotifications, dismissNotification, dismissAllNotifications, idleRuns } = vi.hoisted(() => ({
   loadNotifications: vi.fn(),
@@ -18,8 +18,8 @@ const { useShellNotifications } = await import("./use-shell-notifications");
 
 type Result = ReturnType<typeof useShellNotifications>;
 let latest: Result;
-function Probe({ enabled }: { enabled: boolean }) {
-  latest = useShellNotifications(enabled, "/zh-CN/app/notifications");
+function Probe({ enabled, account = "u1" }: { enabled: boolean; account?: string }) {
+  latest = useShellNotifications(enabled, "/zh-CN/app/notifications", account);
   return null;
 }
 
@@ -83,5 +83,66 @@ describe("useShellNotifications", () => {
     act(() => idleRuns[0]());
     await flush();
     expect(latest?.error).toBe(true);
+  });
+
+  it("dismisses all optimistically and refetches when it fails", async () => {
+    act(() => root.render(<Probe enabled />));
+    act(() => idleRuns[0]());
+    await flush();
+    dismissAllNotifications.mockRejectedValue(new Error("boom"));
+    await act(async () => { await latest?.onDismissAll?.(); });
+    await flush();
+    expect(loadNotifications).toHaveBeenCalledTimes(2);
+    expect(latest?.items.map((item) => item.id)).toEqual(["n1", "n2"]);
+  });
+
+  it("refetches when the bell is opened", async () => {
+    act(() => root.render(<Probe enabled />));
+    act(() => latest?.onOpen?.());
+    await flush();
+    expect(loadNotifications).toHaveBeenCalledTimes(1);
+    expect(latest?.items).toHaveLength(2);
+  });
+
+  // 同标签页对账换了人:铃铛里不能留上一个人的通知。
+  it("clears and refetches when the account changes in place", async () => {
+    act(() => root.render(<Probe enabled account="u1" />));
+    act(() => idleRuns[0]());
+    await flush();
+    expect(latest?.items).toHaveLength(2);
+    loadNotifications.mockResolvedValue([{ id: "b1", title: "李四的", detail: "", urgent: false }]);
+    act(() => root.render(<Probe enabled account="u2" />));
+    expect(latest?.items).toEqual([]);
+    expect(idleRuns).toHaveLength(2);
+    act(() => idleRuns[1]());
+    await flush();
+    expect(loadNotifications).toHaveBeenCalledTimes(2);
+    expect(latest?.items.map((item) => item.id)).toEqual(["b1"]);
+  });
+
+  it("drops a response that was in flight for the previous account", async () => {
+    let settleOld: (items: unknown[]) => void = () => undefined;
+    loadNotifications.mockReturnValueOnce(new Promise((resolve) => { settleOld = resolve; }));
+    act(() => root.render(<Probe enabled account="u1" />));
+    act(() => idleRuns[0]());
+    act(() => root.render(<Probe enabled account="u2" />));
+    await act(async () => { settleOld(ITEMS); await Promise.resolve(); });
+    expect(latest?.items).toEqual([]);
+    expect(latest?.loading).toBe(false);
+  });
+
+  it("stops fetching and returns undefined when disabled, then refetches from empty on re-enable", async () => {
+    act(() => root.render(<Probe enabled />));
+    act(() => idleRuns[0]());
+    await flush();
+    act(() => root.render(<Probe enabled={false} />));
+    expect(latest).toBeUndefined();
+    expect(idleRuns).toHaveLength(1);
+    act(() => root.render(<Probe enabled />));
+    expect(latest?.items).toEqual([]);
+    expect(idleRuns).toHaveLength(2);
+    act(() => idleRuns[1]());
+    await flush();
+    expect(loadNotifications).toHaveBeenCalledTimes(2);
   });
 });

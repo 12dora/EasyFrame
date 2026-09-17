@@ -51,7 +51,7 @@ type ShellTopbarProps = { locale: Locale; pathname: string; t: ReturnType<typeof
 /** 顶栏 + 通知状态:通知数据的每次变化只重画这一层,不牵动外壳与页面。 */
 function ShellTopbar({ locale, pathname, t, identity, brand, canSecurity, canNotifications }: ShellTopbarProps) {
   const router = useRouter(); const href = (path: string) => `/${locale}${path}`;
-  const notifications = useShellNotifications(canNotifications, href("/app/notifications"));
+  const notifications = useShellNotifications(canNotifications, href("/app/notifications"), identity.accountId);
   return <Topbar brand={
     <EnterpriseBrandSlot href={href("/app")} title={brand.title} subtitle={brand.subtitle} logoSrc={brand.logoSrc} testId="app-brand" renderLink={({ href: target, className, children: label, testId }) => <Link href={target} className={className} data-test-id={testId}>{label}</Link>}/>
   } actions={<EnterpriseTopbarActions pathKey={pathname} locale={locale} localeOptions={[{ code: "zh-CN", label: "中文" }, { code: "en", label: "English" }]} onLocaleChange={(next) => router.replace(localizedLocation(pathname, locale, String(next)))} labels={t.shell} notifications={notifications} user={{ name: identity.name, identity: identity.identity, avatarUrl: identity.avatarUrl, permissionSummary: t.common.permissionCount(identity.permissions.size) }} securityHref={canSecurity ? href("/app/settings/security") : undefined} renderLink={({ href: target, className, testId, role, children: label }) => <Link href={target} className={className} data-test-id={testId} role={role}>{label}</Link>} onLogout={() => performEnterpriseLogout(enterpriseLogoutAdapter, () => router.replace(`/${locale}/logged-out`))}/>} />;

@@ -104,6 +104,9 @@ sessionStorage 只是给下一次页面加载留的底稿。
   事件委托预取它的第一页。
 - **通知状态只在顶栏**（`components/use-shell-notifications.ts`）：`useShellNotifications` 只在 `ShellTopbar`
   里调用，加载态翻转不重画外壳、侧栏与页面；首次拉取排到 `scheduleWhenIdle`。
+  传入 `accountId`：对账换了人或权限开关变化时清空、丢弃上一轮在途响应并重拉。
+- **公开页读查询串要自带边界**：`app/[locale]/login/page.tsx` 用 `useSearchParams`，不在外壳段的
+  `force-dynamic` 之下，必须包 `<Suspense fallback={<PageLoadingSkeleton/>}>`。
 - **`next.config.ts`**：`experimental.optimizePackageImports: ["antd", "@easy-enterprise/ui", "dayjs"]`
   （宿主有其它大桶导出的包，如 `recharts`，一并加上）。
 
@@ -124,7 +127,8 @@ sessionStorage 只是给下一次页面加载留的底稿。
 | `app/layout.tsx` → `app/(bare)/layout.tsx`；`app/page.tsx`、`app/login/oidc-complete/page.tsx` 同搬进 `(bare)` | 唯一保留 `headers()` 的根布局，只服务无语言段页面 |
 | `app/[locale]/layout.tsx` | 持有 `<html lang={localeOf(params.locale)}>` + `<body>` + `Toaster`，并 import `globals.css` |
 | `app/[locale]/app/layout.tsx` | `export const dynamic = "force-dynamic"` |
-| `components/use-shell-notifications.ts` | **整份新增**；`blank-shell.tsx` 删掉通知 state，改由 `ShellTopbar` 调用 |
+| `app/[locale]/login/page.tsx` | 默认导出只包 `<Suspense fallback={<PageLoadingSkeleton/>}>`，读 `useSearchParams` 的登录控制器挪进子组件——根布局不再读 `headers()` 后登录页不再是请求期动态，没有边界时 `next build` 报缺 Suspense 或首帧丢掉 `?next=` / `oidc_error` |
+| `components/use-shell-notifications.ts` | **整份新增**；`blank-shell.tsx` 删掉通知 state，改由 `ShellTopbar` 调用并传入 `identity.accountId`（同标签页换人时清空重拉） |
 | `components/blank-shell.tsx`（导航） | `renderNavLink` 用 `prefetch={false}` + 意图预取；设置面板加 `testId` 与 `SettingsEntryPrefetch` |
 | `next.config.ts` | `experimental.optimizePackageImports` |
 | `vitest.config.ts` | `environment` 改 `happy-dom`（快照住在 sessionStorage，钩子用例要挂真实 React 根）；`include` 加 `components/**` |
