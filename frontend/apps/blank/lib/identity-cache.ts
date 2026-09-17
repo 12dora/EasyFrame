@@ -1,5 +1,6 @@
 "use client";
 
+import { clearAsyncDataCache } from "./async-data-cache";
 import type { SecurityCapabilities, ShellIdentity } from "./shell-adapter";
 
 /**
@@ -167,6 +168,8 @@ export function readCachedIdentity(locale: string): ShellIdentity | null {
  * persisted: that gate must be answered live by `/auth/me` on the next load.
  */
 export function writeCachedIdentity(locale: string, identity: ShellIdentity): void {
+  // Another account: the previous person's read cache (`useAsyncData`) goes with it, and mounted pages refetch.
+  if (memory && memory.identity.accountId !== identity.accountId) clearAsyncDataCache();
   memory = { locale, identity };
   if (typeof window === "undefined") return;
   writeRaw(identity.mustChangePassword ? null : JSON.stringify({ v: CACHE_VERSION, locale, identity: { ...identity, permissions: [...identity.permissions] } }));
@@ -180,9 +183,13 @@ export function writeCachedIdentity(locale: string, identity: ShellIdentity): vo
  * (`endLocalSession`), the password-change success path, and the shell's own eject-to-login.
  * Never from `logout()` itself: the 401 path calls `logout()` too, and there the shell wants to
  * stay on screen while the session is re-checked.
+ *
+ * The read cache (`useAsyncData`) is dropped too, with `refetch: false`: the page is about to leave,
+ * and refetching now would only hit a 401 with no credential.
  */
 export function clearCachedIdentity(): void {
   memory = null;
+  clearAsyncDataCache({ refetch: false });
   if (typeof window !== "undefined") writeRaw(null);
   emit();
 }

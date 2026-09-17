@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { asyncDataGeneration, hasAsyncData, subscribeAsyncData, writeAsyncData, type AsyncDataEvent } from "./async-data-cache";
 import { AUTH_TOKEN_STORAGE_KEY, endLocalSession, enterpriseLogoutAdapter, logout } from "./auth-adapter";
 import {
   IDLE_TIMEOUT_MS,
@@ -189,6 +190,41 @@ describe("endLocalSession", () => {
     logout();
     expect(readCachedIdentity("zh-CN")?.name).toBe("张三");
     expect(window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)).toBeNull();
+  });
+});
+
+/** 读取缓存(`useAsyncData`)跟着身份走:登出、被踢、换人都整份作废。 */
+describe("async data cache follows the identity", () => {
+  function seed() {
+    writeAsyncData("/notifications?limit=100", { items: [] }, asyncDataGeneration());
+    expect(hasAsyncData("/notifications?limit=100")).toBe(true);
+  }
+
+  function recordEvents(): { events: AsyncDataEvent[]; stop: () => void } {
+    const events: AsyncDataEvent[] = [];
+    return { events, stop: subscribeAsyncData((event) => { events.push(event); }) };
+  }
+
+  it("is cleared without a refetch when the session ends (logout, eject, password change)", () => {
+    writeCachedIdentity("zh-CN", identity());
+    seed();
+    const { events, stop } = recordEvents();
+    endLocalSession();
+    stop();
+    expect(hasAsyncData("/notifications?limit=100")).toBe(false);
+    expect(events).toEqual([{ kind: "clear", refetch: false }]);
+  });
+
+  it("is cleared and refetched when another account replaces the identity", () => {
+    writeCachedIdentity("zh-CN", identity());
+    seed();
+    const { events, stop } = recordEvents();
+    writeCachedIdentity("zh-CN", identity({ name: "张三(改名)" }));
+    expect(hasAsyncData("/notifications?limit=100")).toBe(true);
+    writeCachedIdentity("zh-CN", identity({ accountId: "u2", name: "李四" }));
+    stop();
+    expect(hasAsyncData("/notifications?limit=100")).toBe(false);
+    expect(events).toEqual([{ kind: "clear", refetch: true }]);
   });
 });
 
