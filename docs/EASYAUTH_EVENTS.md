@@ -61,3 +61,53 @@ EasyAuth 在用户当前授权或应用权限目录变更后，向下游 `POST /
 - `PlatformPorts.authorization` 指向实现了 `refresh_snapshot_for_external_user` / `invalidate_app_snapshots(app_key, catalog_version)` 的 `AuthorizationOperationsPort`
 - `IntegrationPort.get_easyauth_webhook_secret()` 返回明文 webhook 密钥；`get_easyauth_status().app_key` 用于入站事件的 app_key 校验
 - 清单 `webhook.signing` 保持 `hmac-sha256`，并声明 `"events_url": "/api/v1/easyauth/events"`（相对路径，EasyAuth 按应用 `base_url` 解析）
+
+## 认证热路径辅助与装配合同
+
+共享库提供 ORM 无关辅助，宿主自己管 `Account` / `PermissionSnapshot` / `Session`。
+
+| 模块 | 公开 API |
+|---|---|
+| `enterprise_platform.request_scope` | `RequestScopeMiddleware`（纯 ASGI）、`request_scope() -> dict \| None`、`drop_request_memo(*keys)`、`begin_request_scope` / `end_request_scope` |
+| `enterprise_platform.ttl_cache` | `TtlBox(ttl_seconds)`：`peek() -> (hit, value)`、`load(loader)` 锁内单飞、`set(value, *, generation=)`（generation 不匹配则 no-op）、`invalidate()` 丢值并 `generation += 1` |
+| `enterprise_platform.authz.snapshot_freshness` | `SnapshotFreshness`、`classify_snapshot`、`invalidated_expires_at`、`BackgroundRefresher`（按模块路径 import，不从 `authz` 包再导出） |
+
+`request_scope()` 在请求外是 `None`。ContextVar 会拷进线程池：调用方只改返回的 dict，不要 `ContextVar.set` 新 dict。
+
+### 快照新鲜度
+
+`classify_snapshot(fetched_at, expires_at, now, *, near_expiry_ratio=0.40, stale_grace=10min)`（全部 aware datetime）：
+
+| 状态 | 条件 | 宿主请求路径 |
+|---|---|---|
+| `FRESH` | `now < expires_at` 且剩余寿命 ≥ 40% 窗口 | 用行，不打网 |
+| `NEAR_EXPIRY` | `now < expires_at` 且剩余寿命 < `0.40 * (expires_at - fetched_at)` | 用行，后台刷新，key `"{app_key}:{external_user_id}"`，遵守既有失败退避 |
+| `STALE_GRACE` | `now >= expires_at` 且 `expires_at > fetched_at` 且 `now < expires_at + 10min` | 用行的 grants（仍受 catalog floor / `catalog_version` 约束；低于下限的行永不使用），后台刷新；请求不得等 EasyAuth |
+| `EXPIRED` | 其余（含无行） | 同步拉取；失败 fail-closed 为零授权，保留宿主已有 last-good-row |
+
+**显式失效**（`catalog.changed`、管理员吊销等）必须 `expires_at = fetched_at`（`invalidated_expires_at(fetched_at)`），该行永远不能进宽限。`grant.changed` 仍走既有强制同步刷新。EasyAuth HTTP 拉取期间不得持有 DB session。
+
+`BackgroundRefresher(max_workers=2, name="authz-refresh")`：`schedule(key, fn) -> bool` 按 key 去重，已在飞或已 `shutdown` 返回 `False`；done-callback 一律清 key，意外异常 `logger.error(..., exc_info=...)`；已完成 Future 只留 WeakSet 给测试用 `wait(timeout=)`。`shutdown()` 取消未完成任务、不等待。每个 uvicorn worker 各自一份进程内调度，这是预期。
+
+### `require_permission(..., user=)`
+
+默认 `permission_for(code)` 依赖与 `AssemblyDependencies.current_user` **同一个 callable**。路由同时 `Depends(ctx.current_user)` 和 `Depends(ctx.permission_for(code))` 时，`AccountPort.current_user` 只跑一次。
+
+宿主 port：
+
+```python
+def require_permission(code: str, request: Request | None = None, *, user: CurrentUser | None = None) -> None:
+    ...
+```
+
+传入 `user=` 时**不得**再解析当前用户：检查 `code in user.permissions`，写宿主 `authorization.denied` 审计，并 `raise AuthError(403, "缺少权限")`。框架在 port 接受 `user` 时传入已解析用户；旧的 `require_permission(code)` / `(code, request)` 仍可用（拒绝路径可能仍会二次解析）。传入 `permission_dependency_factory` 的宿主行为不变。`create_platform_router(...)` 签名不变。
+
+### 宿主接入清单
+
+子模块更新后（blank / EasyLearning / EasyCustoms / EasyTrade 各改自己的入口，不要改共享库里没有的文件）：
+
+1. **中间件**：所有 `@app.middleware("http")` 写完之后 `app.add_middleware(RequestScopeMiddleware)`，让它包在 `BaseHTTPMiddleware` 之外。
+2. **安全突变**（签发 / 吊销会话、改密）调用 `drop_request_memo("current_user", "account")`（或宿主自己的 key）。
+3. **Workers**：后端默认 2 个 uvicorn worker，环境变量 `BLANK_WEB_WORKERS` / `LEARNING_WEB_WORKERS`（EasyCustoms 已有 `CUSTOMS_WEB_WORKERS`），整数 ≥1，非法值启动失败。`uvicorn.run("pkg.main:app", workers=n, ...)` 必须用 import-string。进程内限流 / SSE / websocket 注册表 / 内存锁按 worker 各算一份；跨进程正确性靠 PostgreSQL advisory lock，不要假设单进程。
+4. 实现上一节的新鲜度语义与 `require_permission(..., user=)`。
+5. `TtlBox` 只缓存近静态行（目录 / EasyAuth 设置 / catalog floor），不要缓存账号、快照或 grants。

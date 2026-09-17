@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 
@@ -91,7 +92,7 @@ def test_threadpool_worker_mutates_same_dict() -> None:
         end_request_scope(token)
 
 
-async def test_non_http_scope_is_passthrough() -> None:
+def test_non_http_scope_is_passthrough() -> None:
     seen: dict[str, object] = {}
 
     async def inner(scope: Scope, receive: Receive, send: Send) -> None:
@@ -99,9 +100,12 @@ async def test_non_http_scope_is_passthrough() -> None:
         seen["type"] = scope["type"]
         seen["memo"] = request_scope()
 
-    middleware = RequestScopeMiddleware(inner)
-    await middleware({"type": "websocket", "path": "/ws"}, _noop_receive, _noop_send)
-    await middleware({"type": "lifespan"}, _noop_receive, _noop_send)
+    async def run() -> None:
+        middleware = RequestScopeMiddleware(inner)
+        await middleware({"type": "websocket", "path": "/ws"}, _noop_receive, _noop_send)
+        await middleware({"type": "lifespan"}, _noop_receive, _noop_send)
+
+    asyncio.run(run())
     assert seen["type"] == "lifespan"
     assert seen["memo"] is None
 

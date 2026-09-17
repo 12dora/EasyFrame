@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol
@@ -151,4 +150,13 @@ class AuthorizationOperationsPort(Protocol):
     def delete_descriptor_key(self, key_id: uuid.UUID, *, actor_id: str) -> None: ...
 
 
-PermissionCheck = Callable[[str], None]
+class PermissionCheck(Protocol):
+    """宿主鉴权口。``user`` 已由装配层解析时不得再调 ``current_user``。"""
+
+    def __call__(
+        self,
+        code: str,
+        request: Any | None = None,
+        *,
+        user: CurrentUser | None = None,
+    ) -> None: ...

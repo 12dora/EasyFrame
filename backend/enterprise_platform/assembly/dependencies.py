@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -65,32 +66,74 @@ def _make_gated_current_user(recovery_user: CurrentUserDep) -> CurrentUserDep:
 
 @dataclass(frozen=True, eq=False)
 class _FixedPermission:
+    """默认权限依赖:与 ``AssemblyDependencies.current_user`` 共用 FastAPI 缓存键。"""
+
     ports: PlatformPorts
     code: str
+    current_user: CurrentUserDep
 
-    def __call__(self, request: Request) -> None:
-        try:
-            # 透传 Request,便于拒绝审计记录 method/route。
-            self.ports.require_permission(self.code, request)  # type: ignore[call-arg]
-        except TypeError:
-            self._without_request()
-        except AuthError as exc:
-            raise HTTPException(exc.status_code, exc.detail) from exc
+    def __call__(self, request: Request, user: CurrentUser) -> None:
+        _enforce_permission(self.ports, self.code, request, user)
 
-    def _without_request(self) -> None:
-        try:
-            self.ports.require_permission(self.code)
-        except AuthError as exc:
-            raise HTTPException(exc.status_code, exc.detail) from exc
+    def as_dependency(self) -> Callable[..., None]:
+        current_user = self.current_user
+
+        def check(
+            request: Request,
+            user: CurrentUser = Depends(current_user),
+        ) -> None:
+            self(request, user)
+
+        return check
 
 
-def _make_permission_for(ports: PlatformPorts, factory: PermissionFactory | None) -> PermissionFactory:
+def _make_permission_for(
+    ports: PlatformPorts, factory: PermissionFactory | None, current_user_dep: CurrentUserDep
+) -> PermissionFactory:
     def permission_for(code: str) -> Callable[..., Any]:
         if factory is not None:
             return factory(code)
-        return _FixedPermission(ports, code)
+        return _FixedPermission(ports, code, current_user_dep).as_dependency()
 
     return permission_for
+
+
+def _enforce_permission(ports: PlatformPorts, code: str, request: Request, user: CurrentUser) -> None:
+    if code in user.permissions:
+        return
+    _deny_permission(ports, code, request, user)
+
+
+def _deny_permission(ports: PlatformPorts, code: str, request: Request, user: CurrentUser) -> None:
+    try:
+        _call_require_permission(ports.require_permission, code, request, user)
+    except AuthError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+    raise HTTPException(403, "缺少权限")
+
+
+def _call_require_permission(port: Any, code: str, request: Request, user: CurrentUser) -> None:
+    if _port_accepts_user(port):
+        _call_with_optional_request(port, code, request, user=user)
+        return
+    _call_with_optional_request(port, code, request)
+
+
+def _call_with_optional_request(port: Any, code: str, request: Request, **kwargs: Any) -> None:
+    try:
+        port(code, request, **kwargs)
+    except TypeError:
+        port(code, **kwargs)
+
+
+def _port_accepts_user(port: Any) -> bool:
+    try:
+        parameters = inspect.signature(port).parameters
+    except (TypeError, ValueError):
+        return False
+    if "user" in parameters:
+        return True
+    return any(item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values())
 
 
 @dataclass(frozen=True)
@@ -187,13 +230,14 @@ def build_assembly_dependencies(
 ) -> AssemblyDependencies:
     resolved = current_user_dependency or _FixedCurrentUser(ports)
     recovery = _make_recovery_user(resolved)
+    gated = _make_gated_current_user(recovery)
     admit_login = _LoginAdmission(hooks, enforce_shared_rate_limits)
     return AssemblyDependencies(
         ports=ports,
         hooks=hooks,
-        current_user=_make_gated_current_user(recovery),
+        current_user=gated,
         recovery_user=recovery,
-        permission_for=_make_permission_for(ports, permission_dependency_factory),
+        permission_for=_make_permission_for(ports, permission_dependency_factory, gated),
         port_call=port_call,
         audited_connection_test=_AuditedConnectionTest(hooks),
         admit_login=admit_login,
