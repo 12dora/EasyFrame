@@ -145,4 +145,47 @@ describe("useShellNotifications", () => {
     await flush();
     expect(loadNotifications).toHaveBeenCalledTimes(2);
   });
+
+  // 旧账号的响应在「换人那一次渲染」的同一个 act 里落地(渲染与 effect 之间的微任务),也不能进新账号的铃铛。
+  it("keeps a previous account's response out even when it resolves inside the switching act", async () => {
+    let settleOld: (items: unknown[]) => void = () => undefined;
+    loadNotifications.mockReturnValueOnce(new Promise((resolve) => { settleOld = resolve; }));
+    act(() => root.render(<Probe enabled account="u1" />));
+    act(() => idleRuns[0]());
+    await act(async () => {
+      root.render(<Probe enabled account="u2" />);
+      settleOld(ITEMS);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(latest?.items).toEqual([]);
+    expect(latest?.loading).toBe(false);
+  });
+
+  // `platformRequest` 按「路径 + token」合并在途 GET:token 未轮换时新账号的请求会领到旧账号那份响应。
+  it("waits for the previous account's in-flight request before fetching, so it cannot join it", async () => {
+    let shared: Promise<unknown[]> | null = null;
+    let settleShared: (items: unknown[]) => void = () => undefined;
+    let responses = 0;
+    loadNotifications.mockImplementation(() => {
+      if (!shared) {
+        responses += 1;
+        const answer = responses === 1 ? ITEMS : [{ id: "b1", title: "李四的", detail: "", urgent: false }];
+        shared = new Promise((resolve) => { settleShared = () => resolve(answer); }).finally(() => { shared = null; }) as Promise<unknown[]>;
+      }
+      return shared;
+    });
+    act(() => root.render(<Probe enabled account="u1" />));
+    act(() => idleRuns[0]());
+    act(() => root.render(<Probe enabled account="u2" />));
+    act(() => idleRuns[1]());
+    await flush();
+    // 旧请求还在途:新账号这一次还没发出,自然也合并不上。
+    expect(loadNotifications).toHaveBeenCalledTimes(1);
+    await act(async () => { settleShared([]); for (let i = 0; i < 6; i += 1) await Promise.resolve(); });
+    expect(loadNotifications).toHaveBeenCalledTimes(2);
+    expect(latest?.items).toEqual([]);
+    await act(async () => { settleShared([]); for (let i = 0; i < 6; i += 1) await Promise.resolve(); });
+    expect(latest?.items.map((item) => item.id)).toEqual(["b1"]);
+  });
 });
