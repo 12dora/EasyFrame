@@ -20,7 +20,14 @@ if not DATABASE_URL:
 if not DATABASE_URL.startswith(("postgresql://", "postgresql+psycopg://")):
     raise RuntimeError("BLANK_DATABASE_URL must be a PostgreSQL URL")
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# 宿主性能:加大连接池并回收空闲连接,保留 pre_ping。
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20,
+    pool_recycle=1800,
+)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
