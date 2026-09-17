@@ -146,9 +146,6 @@ class BackgroundRefresher:
         error = future.exception()
         if error is None:
             return
-        # Alembic fileConfig(disable_existing_loggers=True) 会禁用本 logger;
-        # 后台 worker 的未捕获异常仍必须打出 ERROR + traceback,不能被静默吞掉。
-        logger.disabled = False
         logger.error("authz background refresh failed", exc_info=error)
 
     def _wait_one(self, future: Future[object], timeout: float) -> None:
