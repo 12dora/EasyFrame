@@ -31,6 +31,7 @@ from blank_app.authz_api import (
     validate_principal_config,
 )
 from blank_app.authz_api import router as authz_router
+from blank_app.authz_hotpath import shutdown_background_refresh
 from blank_app.database import SessionLocal
 from blank_app.oidc_adapter import BlankOidcHost
 from enterprise_platform import PlatformPorts, PlatformSecurityHooks, create_platform_router
@@ -38,6 +39,7 @@ from enterprise_platform.auth import AuthError
 from enterprise_platform.authz import PrincipalValidationError
 from enterprise_platform.local_accounts import create_local_account_admin_router
 from enterprise_platform.oidc import create_oidc_router
+from enterprise_platform.request_scope import RequestScopeMiddleware
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -65,7 +67,10 @@ async def lifespan(_app: FastAPI):
     validate_principal_config()
     seed_default_admin()
     seed_platform_catalog()
-    yield
+    try:
+        yield
+    finally:
+        shutdown_background_refresh()
 
 
 app = FastAPI(title="Enterprise Blank API", version="1.0.0", lifespan=lifespan)
@@ -96,6 +101,10 @@ async def security_headers(request: Request, call_next):
     if request.url.path.startswith(SENSITIVE_PATH_PREFIXES):
         response.headers["Cache-Control"] = "no-store"
     return response
+
+
+# 宿主性能:纯 ASGI 请求 memo,必须套在 BaseHTTPMiddleware 之外。
+app.add_middleware(RequestScopeMiddleware)
 
 
 @app.exception_handler(AuthError)

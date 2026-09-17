@@ -12,7 +12,6 @@ from blank_app.models import (
 from enterprise_platform import passkeys as shared_passkeys
 from enterprise_platform.authz import (
     CatalogPermission,
-    DataScope,
     NormalizedGrant,
 )
 from enterprise_platform.local_accounts import (
@@ -169,7 +168,7 @@ class BlankAccountAdapter:
             if account is None or not _facade().account_is_eligible(account):
                 raise _facade().AuthError(401, "登录态无效")
             auth_source = "external" if account.external_source else "local"
-        return _facade().jwt.encode(
+        token = _facade().jwt.encode(
             {
                 "sub": account_id,
                 "jti": _facade().uuid.uuid4().hex,
@@ -181,69 +180,25 @@ class BlankAccountAdapter:
             _facade().signing_key(_facade().SESSION_KEY_PURPOSE),
             _facade().JWT_ALGORITHM,
         )
+        from blank_app.authz_hotpath import drop_auth_memo
+
+        drop_auth_memo()
+        return token
 
     def _authenticated_account(self) -> tuple[Account, bool]:
-        principal_account_id = _facade().request_principal_account_id.get()
-        if principal_account_id:
-            with _facade().SessionLocal() as db:
-                account = db.get(_facade().Account, principal_account_id)
-                if account is None or not _facade().account_is_eligible(account):
-                    raise _facade().AuthError(401, "登录态无效")
-                has_passkey = (
-                    db.query(_facade().Passkey.id).filter(_facade().Passkey.account_id == account.id).first()
-                    is not None
-                )
-                db.expunge(account)
-                return account, has_passkey
-        token = _facade().request_token.get()
-        if not token:
-            raise _facade().AuthError(401, "未登录")
-        claims = _facade()._decode_session_token(token)
+        # 宿主性能:账号加载抽到 authz_hotpath,与 current_user 共用。
+        from blank_app.authz_hotpath import _expunge_if_present, load_authenticated_account
+
         with _facade().SessionLocal() as db:
-            account = db.get(_facade().Account, claims.get("sub"))
-            if account is None or not _facade().account_is_eligible(account):
-                raise _facade().AuthError(401, "登录态无效")
-            issued_at = _facade().datetime.fromtimestamp(
-                float(claims.get("session_started_at", claims["iat"])), tz=_facade().UTC
-            )
-            revoked_at = account.sessions_revoked_at
-            if (
-                revoked_at
-                and (revoked_at if revoked_at.tzinfo else revoked_at.replace(tzinfo=_facade().UTC)) >= issued_at
-            ):
-                raise _facade().AuthError(401, "登录态已失效")
-            has_passkey = (
-                db.query(_facade().Passkey.id).filter(_facade().Passkey.account_id == account.id).first() is not None
-            )
-            db.expunge(account)
+            account, has_passkey = load_authenticated_account(db)
+            _expunge_if_present(db, account)
             return account, has_passkey
 
     def current_user(self) -> CurrentUser:
-        account, _ = self._authenticated_account()
-        if _facade().is_local_superadmin(account):
-            grants = _facade()._superadmin_grants()
-            permissions = set(_facade().ALL_PERMISSIONS)
-        elif not account.external_source:
-            grants = _facade()._local_grants(account)
-            permissions = {grant.code for grant in grants}
-        else:
-            grants = _facade()._snapshot_grants(account)
-            permissions = {grant.code for grant in grants}
-        return _facade().CurrentUser(
-            id=str(account.id),
-            account_id=str(account.id),
-            is_local_superadmin=_facade().is_local_superadmin(account),
-            name=account.username,
-            email=account.email,
-            avatar_url=account.avatar_url,
-            ui_locale=account.ui_locale,
-            must_change_password=account.must_change_password,
-            has_local_password=bool(account.password_hash),
-            permissions=sorted(permissions),
-            grants=list(grants),
-            role_groups=_facade()._snapshot_role_groups(account),
-            security_capabilities=_facade().security_capabilities(account),
-        )
+        # 宿主性能:每请求 memo,失败不缓存;单 Session 取账号与授权。
+        from blank_app.authz_hotpath import resolve_current_user
+
+        return resolve_current_user()
 
     def revoke_sessions(self, account_id: str) -> None:
         with _facade().SessionLocal() as db:
@@ -251,6 +206,9 @@ class BlankAccountAdapter:
             if account:
                 account.sessions_revoked_at = _facade().datetime.now(_facade().UTC)
                 db.commit()
+        from blank_app.authz_hotpath import drop_auth_memo
+
+        drop_auth_memo()
 
     def change_password(self, account_id: str, current_password: str, new_password: str) -> bool:
         with _facade().SessionLocal() as db:
@@ -268,7 +226,10 @@ class BlankAccountAdapter:
             account.must_change_password = False
             account.sessions_revoked_at = _facade().datetime.now(_facade().UTC)
             db.commit()
-            return True
+        from blank_app.authz_hotpath import drop_auth_memo
+
+        drop_auth_memo()
+        return True
 
     def totp_status(self, account_id: str) -> bool:
         with _facade().SessionLocal() as db:
@@ -670,29 +631,30 @@ account_adapter = BlankAccountAdapter()
 local_account_admin = BlankLocalAccountAdmin()
 
 
-def require_permission(code: str) -> None:
-    user = _facade().account_adapter.current_user()
-    if code not in user.permissions:
-        raise _facade().AuthError(403, "缺少权限")
+def require_permission(code: str, request: Any | None = None, *, user: CurrentUser | None = None) -> None:
+    resolved = user if user is not None else _facade().account_adapter.current_user()
+    if code in resolved.permissions:
+        return
+    _deny_missing_permission(resolved, code, request)
 
 
-def _catalog_permissions(db) -> dict[str, CatalogPermission]:
+def _deny_missing_permission(user: CurrentUser, code: str, request: Any | None) -> None:
+    after: dict[str, object] = {"permission": code, "source": "require_permission"}
+    if request is not None:
+        route = request.scope.get("route")
+        after["method"] = request.method
+        after["route"] = getattr(route, "path", None) or request.url.path
+    _facade().record_platform_audit(user.id, "authorization.denied", None, after)
+    raise _facade().AuthError(403, "缺少权限")
+
+
+def _catalog_permissions(db=None) -> dict[str, CatalogPermission]:
     """目录坏 scope 逐项忽略，不能让一条脏配置扩大权限或毒化整次读取。"""
 
-    catalog: dict[str, CatalogPermission] = {}
-    for row in db.query(_facade().PermissionCatalog).all():
-        scopes: set[DataScope] = set()
-        for raw_scope in row.supported_scopes if isinstance(row.supported_scopes, list | tuple) else ():
-            try:
-                scopes.add(_facade().DataScope(str(raw_scope)))
-            except ValueError:
-                continue
-        catalog[row.code] = _facade().CatalogPermission(
-            code=row.code,
-            supported_scopes=frozenset(scopes),
-            active=row.active,
-        )
-    return catalog
+    # 宿主性能:权限目录走进程级短 TTL,调用方可省略 Session。
+    from blank_app.authz_cache import catalog_map
+
+    return catalog_map(db)
 
 
 def _snapshot_grants(account: Account) -> tuple[NormalizedGrant, ...]:
@@ -700,8 +662,7 @@ def _snapshot_grants(account: Account) -> tuple[NormalizedGrant, ...]:
 
 
 def _local_grants(account: Account) -> tuple[NormalizedGrant, ...]:
-    with _facade().SessionLocal() as db:
-        catalog = _facade()._catalog_permissions(db)
+    catalog = _facade()._catalog_permissions(None)
     baseline = ({"code": code, "scope": "SELF"} for code in _facade().BASELINE_SELF_SERVICE)
     stored = account.local_permissions if isinstance(account.local_permissions, list) else []
     return _facade().normalize_local_grants((*baseline, *stored), catalog)
@@ -726,9 +687,11 @@ def _superadmin_grants() -> tuple[NormalizedGrant, ...]:
 def _snapshot_role_groups(account: Account) -> list[str]:
     if not account.external_source or not account.external_user_id:
         return []
+    # 宿主性能:独立调用仍只读未过期行,不触发拉取;app_key 走短 TTL。
+    from blank_app.authz_cache import cached_app_key
+
     with _facade().SessionLocal() as db:
-        integration = db.get(_facade().PlatformSetting, "easyauth")
-        app_key = str((integration.value if integration else {}).get("app_key") or "").strip()
+        app_key = cached_app_key(db)
         if not app_key:
             return []
         snapshot = (
@@ -743,8 +706,12 @@ def _snapshot_role_groups(account: Account) -> list[str]:
         )
     if snapshot is None or not isinstance(snapshot.groups, list):
         return []
+    return _group_names(snapshot.groups)
+
+
+def _group_names(groups: object) -> list[str]:
     names: list[str] = []
-    for group in snapshot.groups:
+    for group in groups if isinstance(groups, list) else []:
         name = group.get("name") if isinstance(group, dict) else None
         if isinstance(name, str) and name.strip() and name.strip() not in names:
             names.append(name.strip())

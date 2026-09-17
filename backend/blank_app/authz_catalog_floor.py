@@ -55,16 +55,30 @@ def raise_catalog_floor(db, app_key: str, catalog_version: int) -> bool:
     setting = db.get(PlatformSetting, CATALOG_FLOOR_SETTING_KEY)
     setting.value = _with_floor(setting.value, configured_authority(db), app_key, raised)
     flag_modified(setting, "value")
+    _invalidate_floors_after_commit(db)
     return True
+
+
+def _invalidate_floors_after_commit(db) -> None:
+    from sqlalchemy import event
+
+    from blank_app.authz_cache import invalidate_floors
+
+    def _on_commit(_session) -> None:
+        invalidate_floors()
+
+    event.listen(db, "after_commit", _on_commit, once=True)
 
 
 def reset_catalog_floor() -> None:
     with SessionLocal() as db:
         setting = db.get(PlatformSetting, CATALOG_FLOOR_SETTING_KEY)
-        if setting is None:
-            return
-        db.delete(setting)
-        db.commit()
+        if setting is not None:
+            db.delete(setting)
+            db.commit()
+    from blank_app.authz_cache import invalidate_floors
+
+    invalidate_floors()
 
 
 def _with_floor(value: object, authority: str, app_key: str, catalog_version: int) -> dict:

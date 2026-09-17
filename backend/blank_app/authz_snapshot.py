@@ -15,7 +15,6 @@ from blank_app.authz_catalog_floor import catalog_floor, lock_catalog_floor, rai
 from blank_app.models import PermissionSnapshot
 from enterprise_platform.authz import (
     CatalogPermission,
-    DataScope,
     EasyAuthPermissionClient,
     NormalizedGrant,
 )
@@ -62,37 +61,61 @@ def seed_platform_catalog() -> None:
         "accounts.local.manage": ("管理本地账户", "Manage local accounts"),
     }
     with _facade().SessionLocal() as db:
-        registered_codes = {permission.code for permission in _facade().FRAMEWORK_PERMISSIONS}
-        db.query(_facade().PermissionCatalog).filter(_facade().PermissionCatalog.code.notin_(registered_codes)).update(
-            {_facade().PermissionCatalog.active: False},
-            synchronize_session=False,
-        )
-        for permission in _facade().FRAMEWORK_PERMISSIONS:
-            row = db.get(_facade().PermissionCatalog, permission.code)
-            name_zh, name_en = names.get(permission.code, (permission.code, permission.code))
-            if row is None:
-                row = _facade().PermissionCatalog(
-                    code=permission.code,
-                    name_zh=name_zh,
-                    name_en=name_en,
-                    domain=permission.domain,
-                    resource=permission.resource,
-                    group_key=permission.group_key,
-                    supported_scopes=[scope.value for scope in permission.supported_scopes],
-                    risk_level=permission.risk_level,
-                    active=permission.active,
-                )
-                db.add(row)
-            else:
-                row.name_zh = name_zh
-                row.name_en = name_en
-                row.domain = permission.domain
-                row.resource = permission.resource
-                row.group_key = permission.group_key
-                row.supported_scopes = [scope.value for scope in permission.supported_scopes]
-                row.risk_level = permission.risk_level
-                row.active = permission.active
+        _upsert_catalog_rows(db, names)
         db.commit()
+    # 宿主性能:bulk update 不触发 ORM 事件,种子后失效并回填目录缓存。
+    _reload_catalog_cache()
+
+
+def _upsert_catalog_rows(db, names: dict[str, tuple[str, str]]) -> None:
+    registered_codes = {permission.code for permission in _facade().FRAMEWORK_PERMISSIONS}
+    db.query(_facade().PermissionCatalog).filter(_facade().PermissionCatalog.code.notin_(registered_codes)).update(
+        {_facade().PermissionCatalog.active: False},
+        synchronize_session=False,
+    )
+    for permission in _facade().FRAMEWORK_PERMISSIONS:
+        _upsert_catalog_row(db, permission, names)
+
+
+def _upsert_catalog_row(db, permission, names: dict[str, tuple[str, str]]) -> None:
+    row = db.get(_facade().PermissionCatalog, permission.code)
+    name_zh, name_en = names.get(permission.code, (permission.code, permission.code))
+    if row is None:
+        db.add(_new_catalog_row(permission, name_zh, name_en))
+        return
+    _copy_catalog_row(row, permission, name_zh, name_en)
+
+
+def _new_catalog_row(permission, name_zh: str, name_en: str):
+    return _facade().PermissionCatalog(
+        code=permission.code,
+        name_zh=name_zh,
+        name_en=name_en,
+        domain=permission.domain,
+        resource=permission.resource,
+        group_key=permission.group_key,
+        supported_scopes=[scope.value for scope in permission.supported_scopes],
+        risk_level=permission.risk_level,
+        active=permission.active,
+    )
+
+
+def _copy_catalog_row(row, permission, name_zh: str, name_en: str) -> None:
+    row.name_zh = name_zh
+    row.name_en = name_en
+    row.domain = permission.domain
+    row.resource = permission.resource
+    row.group_key = permission.group_key
+    row.supported_scopes = [scope.value for scope in permission.supported_scopes]
+    row.risk_level = permission.risk_level
+    row.active = permission.active
+
+
+def _reload_catalog_cache() -> None:
+    from blank_app.authz_cache import catalog_map, invalidate_catalog
+
+    invalidate_catalog()
+    catalog_map()
 
 
 def _permission_client() -> EasyAuthPermissionClient:
@@ -111,14 +134,9 @@ def _permission_client() -> EasyAuthPermissionClient:
 
 
 def _catalog_map(db) -> dict[str, CatalogPermission]:
-    return {
-        row.code: _facade().CatalogPermission(
-            code=row.code,
-            supported_scopes=frozenset(_facade().DataScope(scope) for scope in row.supported_scopes),
-            active=row.active,
-        )
-        for row in db.query(_facade().PermissionCatalog).all()
-    }
+    from blank_app.authz_cache import catalog_map
+
+    return catalog_map(db)
 
 
 def ensure_account_snapshot(account_id: str | uuid.UUID, *, force: bool = False) -> bool:
@@ -166,8 +184,10 @@ def _load_snapshot_cache(account_id: uuid.UUID) -> tuple[bool, bool, str] | None
         account = db.get(_facade().Account, account_id)
         if account is None or not account.external_source or not account.external_user_id:
             return None
-        setting = db.get(_facade().PlatformSetting, "easyauth")
-        app_key = str((setting.value if setting else {}).get("app_key") or "")
+        # 宿主性能:easyauth app_key 与目录下限走短 TTL,本函数只读账号与快照行。
+        from blank_app.authz_cache import cached_app_key
+
+        app_key = cached_app_key(db)
         cached = (
             db.query(_facade().PermissionSnapshot)
             .filter(
@@ -180,8 +200,16 @@ def _load_snapshot_cache(account_id: uuid.UUID) -> tuple[bool, bool, str] | None
         pull_key = f"{app_key}:{account.external_user_id}"
         if cached is None:
             return False, False, pull_key
-        fresh = _facade()._utc(cached.expires_at) > now and cached.catalog_version >= catalog_floor(db, app_key)
-        return True, fresh, pull_key
+        return True, _row_is_fresh(db, cached, app_key, now), pull_key
+
+
+def _row_is_fresh(db, cached, app_key: str, now) -> bool:
+    from blank_app.authz_cache import cached_catalog_floor
+    from enterprise_platform.authz.snapshot_freshness import SnapshotFreshness, classify_snapshot
+
+    freshness = classify_snapshot(_facade()._utc(cached.fetched_at), _facade()._utc(cached.expires_at), now)
+    unexpired = freshness in {SnapshotFreshness.FRESH, SnapshotFreshness.NEAR_EXPIRY}
+    return unexpired and cached.catalog_version >= cached_catalog_floor(db, app_key)
 
 
 def _lock_for(pull_key: str) -> threading.Lock:
@@ -219,76 +247,104 @@ def _prune_failed_pulls(now: datetime) -> None:
 def refresh_account_snapshot(user_id: uuid.UUID) -> SnapshotResponse:
     """抓取并原子持久化单个外部账号快照；上游失败不覆盖最后成功数据。"""
 
+    # 宿主性能:先短读身份并关连接,HTTP 完成后再开短写事务。
+    identity = _refresh_identity(user_id)
+    snapshot = _fetch_remote_snapshot(identity["external_user_id"])
+    return _persist_remote_snapshot(identity, snapshot)
+
+
+def _refresh_identity(user_id: uuid.UUID) -> dict:
     with _facade().SessionLocal() as db:
         account = db.get(_facade().Account, user_id)
         if account is None:
             raise _facade().HTTPException(404, "user not found")
         if not account.external_source or not account.external_user_id:
             raise _facade().HTTPException(409, "user external identity is not configured")
-        client: object | None = None
-        try:
-            client = _facade()._permission_client()
-            snapshot = client.fetch_permission_snapshot(account.external_user_id)
-        except _facade().EasyAuthForbiddenError as exc:
-            raise _facade().HTTPException(403, str(exc)) from exc
-        except _facade().EasyAuthClientError as exc:
-            raise _facade().HTTPException(503, str(exc)) from exc
-        finally:
-            if client is not None:
-                _facade()._close_permission_client(client)
-        if _facade()._utc(snapshot.expires_at) <= _facade().datetime.now(_facade().UTC):
-            raise _facade().HTTPException(503, "EasyAuth permission response is already expired")
-        account_id = account.id
-        display_name = account.username
-        external_source = account.external_source
-        external_user_id = account.external_user_id
-        row = (
-            db.query(_facade().PermissionSnapshot)
-            .filter(
-                _facade().PermissionSnapshot.external_source == external_source,
-                _facade().PermissionSnapshot.external_user_id == external_user_id,
-                _facade().PermissionSnapshot.app_key == snapshot.app_key,
-            )
-            .one_or_none()
-        ) or _facade().PermissionSnapshot(
-            account_id=account_id,
-            external_source=external_source,
-            external_user_id=external_user_id,
-            app_key=snapshot.app_key,
-        )
-        values = {
-            "account_id": account_id,
-            "groups": [item.model_dump(mode="json") for item in snapshot.groups],
-            "grants": [item.model_dump(mode="json") for item in snapshot.grants],
-            "grant_version": snapshot.grant_version,
-            "catalog_version": snapshot.catalog_version,
-            "snapshot_version": snapshot.snapshot_version,
-            "fetched_at": _facade().datetime.now(_facade().UTC),
-            "expires_at": snapshot.expires_at,
+        return {
+            "account_id": account.id,
+            "display_name": account.username,
+            "external_source": account.external_source,
+            "external_user_id": account.external_user_id,
         }
+
+
+def _fetch_remote_snapshot(external_user_id: str):
+    client: object | None = None
+    try:
+        client = _facade()._permission_client()
+        snapshot = client.fetch_permission_snapshot(external_user_id)
+    except _facade().EasyAuthForbiddenError as exc:
+        raise _facade().HTTPException(403, str(exc)) from exc
+    except _facade().EasyAuthClientError as exc:
+        raise _facade().HTTPException(503, str(exc)) from exc
+    finally:
+        if client is not None:
+            _facade()._close_permission_client(client)
+    if _facade()._utc(snapshot.expires_at) <= _facade().datetime.now(_facade().UTC):
+        raise _facade().HTTPException(503, "EasyAuth permission response is already expired")
+    return snapshot
+
+
+def _persist_remote_snapshot(identity: dict, snapshot) -> SnapshotResponse:
+    with _facade().SessionLocal() as db:
+        row = _existing_or_new_row(db, identity, snapshot.app_key)
         row = _facade()._commit_snapshot_row(
             db,
             row,
-            external_source=external_source,
-            external_user_id=external_user_id,
+            external_source=identity["external_source"],
+            external_user_id=identity["external_user_id"],
             app_key=snapshot.app_key,
-            values=values,
+            values=_snapshot_write_values(identity["account_id"], snapshot),
         )
-        grant_count = len(_facade().normalize_grants(row.grants, _facade()._catalog_map(db)))
-        return _facade().SnapshotResponse(
-            user_id=account_id,
-            display_name=display_name,
-            external_user_id=external_user_id,
-            app_key=row.app_key,
-            grant_count=grant_count,
-            grant_version=row.grant_version,
-            catalog_version=row.catalog_version,
-            snapshot_version=row.snapshot_version,
-            fetched_at=row.fetched_at,
-            expires_at=row.expires_at,
-            expired=False,
-            role_groups=_facade()._role_groups(row.groups),
+        return _snapshot_response(identity, row, db)
+
+
+def _existing_or_new_row(db, identity: dict, app_key: str) -> PermissionSnapshot:
+    return (
+        db.query(_facade().PermissionSnapshot)
+        .filter(
+            _facade().PermissionSnapshot.external_source == identity["external_source"],
+            _facade().PermissionSnapshot.external_user_id == identity["external_user_id"],
+            _facade().PermissionSnapshot.app_key == app_key,
         )
+        .one_or_none()
+    ) or _facade().PermissionSnapshot(
+        account_id=identity["account_id"],
+        external_source=identity["external_source"],
+        external_user_id=identity["external_user_id"],
+        app_key=app_key,
+    )
+
+
+def _snapshot_write_values(account_id, snapshot) -> dict:
+    return {
+        "account_id": account_id,
+        "groups": [item.model_dump(mode="json") for item in snapshot.groups],
+        "grants": [item.model_dump(mode="json") for item in snapshot.grants],
+        "grant_version": snapshot.grant_version,
+        "catalog_version": snapshot.catalog_version,
+        "snapshot_version": snapshot.snapshot_version,
+        "fetched_at": _facade().datetime.now(_facade().UTC),
+        "expires_at": snapshot.expires_at,
+    }
+
+
+def _snapshot_response(identity: dict, row: PermissionSnapshot, db) -> SnapshotResponse:
+    grant_count = len(_facade().normalize_grants(row.grants, _facade()._catalog_map(db)))
+    return _facade().SnapshotResponse(
+        user_id=identity["account_id"],
+        display_name=identity["display_name"],
+        external_user_id=identity["external_user_id"],
+        app_key=row.app_key,
+        grant_count=grant_count,
+        grant_version=row.grant_version,
+        catalog_version=row.catalog_version,
+        snapshot_version=row.snapshot_version,
+        fetched_at=row.fetched_at,
+        expires_at=row.expires_at,
+        expired=False,
+        role_groups=_facade()._role_groups(row.groups),
+    )
 
 
 def _commit_snapshot_row(
@@ -400,47 +456,16 @@ def _newer_or_equal_snapshot(statement, floor: int):
 def snapshot_grants_for_account(account) -> tuple[NormalizedGrant, ...]:
     """权限检查:过期则懒刷新;刷新失败 fail-closed 为零权限。"""
 
-    if not account.external_source or not account.external_user_id:
-        return ()
-    _facade().ensure_account_snapshot(account.id, force=False)
-    with _facade().SessionLocal() as db:
-        integration = db.get(_facade().PlatformSetting, "easyauth")
-        app_key = str((integration.value if integration else {}).get("app_key") or "")
-        snapshot = (
-            db.query(_facade().PermissionSnapshot)
-            .filter(
-                _facade().PermissionSnapshot.external_source == account.external_source,
-                _facade().PermissionSnapshot.external_user_id == account.external_user_id,
-                _facade().PermissionSnapshot.app_key == app_key,
-            )
-            .one_or_none()
-        )
-        floor = catalog_floor(db, app_key)
-        expired = snapshot is None or _facade()._utc(snapshot.expires_at) <= _facade().datetime.now(_facade().UTC)
-        if snapshot is None or expired or snapshot.catalog_version < floor:
-            return ()
-        return tuple(
-            NormalizedGrant(code=grant.code, scope=grant.scope)
-            for grant in _facade().normalize_grants(snapshot.grants, _grant_catalog(db))
-        )
+    from blank_app.authz_hotpath import load_external_authz
+
+    grants, _groups = load_external_authz(account)
+    return grants
 
 
 def _grant_catalog(db) -> dict[str, CatalogPermission]:
-    catalog: dict[str, CatalogPermission] = {}
-    for row in db.query(_facade().PermissionCatalog).all():
-        scopes: set[DataScope] = set()
-        raw_scopes = row.supported_scopes if isinstance(row.supported_scopes, list | tuple) else ()
-        for raw_scope in raw_scopes:
-            try:
-                scopes.add(DataScope(str(raw_scope)))
-            except ValueError:
-                continue
-        catalog[row.code] = CatalogPermission(
-            code=row.code,
-            supported_scopes=frozenset(scopes),
-            active=row.active,
-        )
-    return catalog
+    from blank_app.authz_cache import catalog_map
+
+    return catalog_map(db)
 
 
 def refresh_snapshot_for_external_user(external_user_id: str, expected_snapshot_version: str) -> None:
@@ -476,15 +501,17 @@ def _refresh_grant_after_flight(account, external_user_id: str, expected_snapsho
 def invalidate_app_snapshots(app_key: str, catalog_version: int) -> None:
     """webhook catalog.changed:抬高最低目录版本并过期缓存;已达该版本则幂等跳过。"""
 
-    now = _facade().datetime.now(_facade().UTC)
     with _facade().SessionLocal() as db:
         if not raise_catalog_floor(db, app_key, catalog_version):
             return
         db.query(_facade().PermissionSnapshot).filter(_facade().PermissionSnapshot.app_key == app_key).update(
-            {_facade().PermissionSnapshot.expires_at: now},
+            {_facade().PermissionSnapshot.expires_at: _facade().PermissionSnapshot.fetched_at},
             synchronize_session=False,
         )
         db.commit()
+    from blank_app.authz_cache import invalidate_floors
+
+    invalidate_floors()
 
 
 def _reject_below_catalog_floor(db, app_key: str, catalog_version: int) -> int:

@@ -330,7 +330,9 @@ class BlankIntegrationAdapter:
         old_authority = str(old.get("base_url") or "").rstrip("/")
         if old_authority and old_authority != data["base_url"]:
             reset_catalog_floor()
-        _facade()._save_setting("easyauth", data, actor_id=actor_id, action="authz.settings.update")
+        from blank_app.authz_cache import persist_easyauth_setting
+
+        persist_easyauth_setting(data, actor_id=actor_id, action="authz.settings.update")
         return _facade().EasyAuthStatus.model_validate(data)
 
     def save_authorization_update(
@@ -364,7 +366,9 @@ class BlankIntegrationAdapter:
         old = _facade()._get_setting("easyauth")
         data = dict(old)
         data["permission_request_url"] = payload.permission_request_url.strip()
-        _facade()._save_setting("easyauth", data, actor_id=actor_id, action="authz.settings.update")
+        from blank_app.authz_cache import persist_easyauth_setting
+
+        persist_easyauth_setting(data, actor_id=actor_id, action="authz.settings.update")
         return _facade().EasyAuthStatus.model_validate(data)
 
     def test_easyauth(self) -> ConnectionTestResult:
