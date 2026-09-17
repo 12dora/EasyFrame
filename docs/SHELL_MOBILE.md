@@ -133,16 +133,19 @@ EasyUI 只管外壳与表格。分栏详情页、并排的编辑面板、宽表�
 | 文件 | 钉住什么 |
 |---|---|
 | `components/blank-shell.test.tsx` | 导航速度那一组（意图、预取、进度条）继续用替身；顶栏替身**必须渲染 `leading`**，`MobileNav` 替身透出 `variant` 与 `pathKey`，用例断言宿主要的是 `variant="trigger"` 且它在 `<header>` 里 |
-| `components/blank-shell.mobile.test.tsx` | 用**真的** `Topbar` / `MobileNav` / `EnterpriseAppFrame`：汉堡在 `<header>` 里且带 `md:hidden`、`admin-mobile-nav` 分区栏不再渲染、`<main>` 有 `pb-6 md:pb-12`；点汉堡打开抽屉后 `app-footer-fallback-inline` 在抽屉里、抽屉里**没有** `<footer>`；页面底部那一份 `<footer>` 仍挂在框架上（包裹层 `md:block`） |
-| `components/examples/table-example.test.tsx` | 名称列 `mobile: "title"`、标记穿得过整串装饰器、`labels.cards` 中英两套都给齐 |
+| `components/blank-shell.mobile.test.tsx` | 用**真的** `Topbar` / `MobileNav` / `EnterpriseAppFrame`：汉堡在 `<header>` 里且带 `md:hidden`、`aria-label` 是本地化的「菜单」、`aria-haspopup="menu"`、点击前 `aria-expanded="false"`；`admin-mobile-nav` 分区栏不再渲染；`<main>` 有 `pb-6` 与 `md:pb-12` 而**没有**裸 `pb-12`；点汉堡打开抽屉后 `app-footer-fallback-inline` 在抽屉里、抽屉里**没有** `<footer>`；页面底部那一份 `<footer>` 的包裹层同时有 `hidden` 与 `md:block`；强制改密壳不渲染汉堡、页脚仍是带地标的那一份 |
+| `components/examples/table-example.test.tsx` | 列定义那一层：名称列 `mobile: "title"`、标记穿得过整串装饰器、`labels.cards` 中英两套都给齐。再在手机视口下**真的挂一遍整页**（`matchMedia` 对 `(max-width: 767px)` 答 `true`）：`examples-table-cards` 出现、没有 `<table>` 也没有 `q-search-icon`、标题行是样例名称、`dt` 正好是其余三列、工具条的 `-cards-search-q` / `-cards-filter-status` / `-cards-sort` 与底部 `-cards-pagination` 都在、英文界面的排序下拉读屏名是 `Sort`、筛选首项是 `Status:All` |
 
-**动效依赖的坑。** EasyUI 的 `motion` 是 peer 依赖，住在
-`packages/easy-enterprise/node_modules/.pnpm` 下，从它自己那层解析 react ⇒ 拿到第二份
-（`Cannot read properties of null (reading 'useState')`）。`resolve.dedupe` 管不到
-node_modules 里被 externalize 的依赖，所以 `apps/blank/vitest.config.ts` 里还加了两条：
-按实路径把 `react` / `react-dom` 钉成宿主那一份，并把 `motion` / `framer-motion`
-`server.deps.inline` 进来让别名生效。有了这两条，带动效的 kit 组件（`MobileNav` 的抽屉）
-在宿主用例里能用真的，不必换替身。
+**class 断言要按 token 集合比，不要 `toContain`。** `"pb-12"` 是 `"md:pb-12"` 的子串：子串断言分不出「手机上也留了 48 px」和「只有桌面留 48 px」，断点前缀写漏了照样绿。`hidden` / `md:block` 这一对同理 —— 少一个就分别是「手机上页脚没收起」与「桌面上页脚没了」。
+
+**第二份 react 的坑。** EasyUI 的 `motion` 与 `antd` 都是 peer 依赖，装在
+`packages/easy-enterprise/node_modules/.pnpm` 下、与**另一个** react 小版本配对，从它们自己
+那层解析 react ⇒ 拿到第二份（`Cannot read properties of null (reading 'useState' /
+'useRef')`）。`resolve.dedupe` 管不到 node_modules 里被 externalize 的依赖，所以
+`apps/blank/vitest.config.ts` 里按实路径把 `react` / `react-dom` / `antd` 钉成宿主那一份，
+另把 `motion` / `framer-motion` `server.deps.inline` 进来，让别名对它们内部的 react 也生效。
+有了这几条，带动效的 kit 组件（`MobileNav` 的抽屉）与带 antd 的卡片列表（`Pagination` /
+`Checkbox`）在宿主用例里都能用真的，不必换替身。
 
 ## 已知不变量（回归时照着看）
 

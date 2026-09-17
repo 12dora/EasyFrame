@@ -15,6 +15,7 @@ import { defineConfig } from "vitest/config";
 const require = createRequire(import.meta.url);
 const reactDir = dirname(require.resolve("react/package.json"));
 const reactDomDir = dirname(require.resolve("react-dom/package.json"));
+const antdDir = dirname(require.resolve("antd/package.json"));
 
 export default defineConfig({
   root: import.meta.dirname,
@@ -34,6 +35,10 @@ export default defineConfig({
       { find: /^react\//, replacement: `${reactDir}/` },
       { find: /^react-dom$/, replacement: `${reactDomDir}/index.js` },
       { find: /^react-dom\//, replacement: `${reactDomDir}/` },
+      // antd 同理:EasyUI 那层的 antd 是跟 react 19.2.8 配对安装的,`Pagination` /
+      // `Checkbox` 里的 hook 会跑在第二份 react 上。钉到宿主这一份(它配的就是上面那个 react)。
+      { find: /^antd$/, replacement: `${antdDir}/es/index.js` },
+      { find: /^antd\//, replacement: `${antdDir}/` },
     ],
   },
   test: {
