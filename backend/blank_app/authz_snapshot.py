@@ -78,37 +78,25 @@ def _upsert_catalog_rows(db, names: dict[str, tuple[str, str]]) -> None:
 
 
 def _upsert_catalog_row(db, permission, names: dict[str, tuple[str, str]]) -> None:
-    row = db.get(_facade().PermissionCatalog, permission.code)
     name_zh, name_en = names.get(permission.code, (permission.code, permission.code))
-    if row is None:
-        db.add(_new_catalog_row(permission, name_zh, name_en))
-        return
-    _copy_catalog_row(row, permission, name_zh, name_en)
-
-
-def _new_catalog_row(permission, name_zh: str, name_en: str):
-    return _facade().PermissionCatalog(
-        code=permission.code,
-        name_zh=name_zh,
-        name_en=name_en,
-        domain=permission.domain,
-        resource=permission.resource,
-        group_key=permission.group_key,
-        supported_scopes=[scope.value for scope in permission.supported_scopes],
-        risk_level=permission.risk_level,
-        active=permission.active,
+    values = {
+        "code": permission.code,
+        "name_zh": name_zh,
+        "name_en": name_en,
+        "domain": permission.domain,
+        "resource": permission.resource,
+        "group_key": permission.group_key,
+        "supported_scopes": [scope.value for scope in permission.supported_scopes],
+        "risk_level": permission.risk_level,
+        "active": permission.active,
+    }
+    statement = _facade().pg_insert(_facade().PermissionCatalog).values(**values)
+    db.execute(
+        statement.on_conflict_do_update(
+            index_elements=["code"],
+            set_={field: getattr(statement.excluded, field) for field in values if field != "code"},
+        )
     )
-
-
-def _copy_catalog_row(row, permission, name_zh: str, name_en: str) -> None:
-    row.name_zh = name_zh
-    row.name_en = name_en
-    row.domain = permission.domain
-    row.resource = permission.resource
-    row.group_key = permission.group_key
-    row.supported_scopes = [scope.value for scope in permission.supported_scopes]
-    row.risk_level = permission.risk_level
-    row.active = permission.active
 
 
 def _reload_catalog_cache() -> None:
@@ -495,7 +483,26 @@ def _refresh_grant_after_flight(account, external_user_id: str, expected_snapsho
         _, again = _external_snapshot_state(external_user_id)
         if again == expected_snapshot_version:
             return
+        _invalidate_external_snapshot(account)
         raise
+
+
+def _invalidate_external_snapshot(account) -> None:
+    """grant.changed 强制拉取失败:该用户行 expires_at=fetched_at,永不进宽限。"""
+
+    with _facade().SessionLocal() as db:
+        from blank_app.authz_cache import cached_app_key
+
+        app_key = cached_app_key(db)
+        db.query(_facade().PermissionSnapshot).filter(
+            _facade().PermissionSnapshot.external_source == account.external_source,
+            _facade().PermissionSnapshot.external_user_id == account.external_user_id,
+            _facade().PermissionSnapshot.app_key == app_key,
+        ).update(
+            {_facade().PermissionSnapshot.expires_at: _facade().PermissionSnapshot.fetched_at},
+            synchronize_session=False,
+        )
+        db.commit()
 
 
 def invalidate_app_snapshots(app_key: str, catalog_version: int) -> None:

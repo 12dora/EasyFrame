@@ -341,17 +341,9 @@ def _my_grants(*, actor_id: str) -> list[MyGrantResponse]:
                 MyGrantResponse(permission=code, data_scope="ALL", source="local-break-glass")
                 for code in sorted(ALL_PERMISSIONS)
             ]
-        setting = db.get(PlatformSetting, "easyauth")
-        app_key = str((setting.value if setting else {}).get("app_key") or "")
-        snapshot = (
-            db.query(PermissionSnapshot)
-            .filter(
-                PermissionSnapshot.account_id == account.id,
-                PermissionSnapshot.app_key == app_key,
-                PermissionSnapshot.expires_at > datetime.now(UTC),
-            )
-            .one_or_none()
-        )
+        from blank_app.authz_hotpath import usable_snapshot_row
+
+        snapshot = usable_snapshot_row(db, account)
         if snapshot is None:
             return []
         return [

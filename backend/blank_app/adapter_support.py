@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from passlib.context import CryptContext
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from blank_app.models import Account
 from blank_app.permission_registry import FRAMEWORK_PERMISSIONS
@@ -137,8 +138,10 @@ def _create_bootstrap_admin(db, username: str) -> None:
     password = _facade().os.getenv("BLANK_ADMIN_PASSWORD")
     if not password or _facade().is_unsafe_bootstrap_secret(password, min_length=12):
         raise RuntimeError("BLANK_ADMIN_PASSWORD must be at least 12 characters and must not use a public example")
-    db.add(
-        _facade().Account(
+    db.execute(
+        pg_insert(_facade().Account)
+        .values(
+            id=_facade().uuid.uuid4(),
             username=username,
             email=_facade().os.getenv("BLANK_ADMIN_EMAIL") or None,
             password_hash=_facade().pwd_context.hash(password),
@@ -146,6 +149,7 @@ def _create_bootstrap_admin(db, username: str) -> None:
             is_admin=True,
             must_change_password=True,
         )
+        .on_conflict_do_nothing(index_elements=["username"])
     )
     db.commit()
 

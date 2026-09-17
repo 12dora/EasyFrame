@@ -153,6 +153,20 @@ def _finish_external_authz(account: Account, pending: SnapshotState) -> tuple[tu
     return (), again.groups or pending.groups
 
 
+def usable_snapshot_row(db: Session, account: Account) -> PermissionSnapshot | None:
+    """与 /auth/me 同一套分类+目录下限:宽限行可读,失效/过宽限不可读。"""
+
+    if not account.external_source or not account.external_user_id:
+        return None
+    now = datetime.now(UTC)
+    app_key = cached_app_key(db)
+    row = _snapshot_row(db, account, app_key)
+    if row is None:
+        return None
+    state = _state_from_row(db, row, now, f"{app_key}:{account.external_user_id}", app_key)
+    return row if _can_serve(state) else None
+
+
 def _can_serve(state: SnapshotState) -> bool:
     return state.freshness in _USABLE
 

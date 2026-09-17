@@ -137,6 +137,39 @@ def test_auth_failure_is_not_cached(monkeypatch) -> None:
         request_token.reset(token)
 
 
+def test_revocation_is_enforced_on_the_next_request(client: TestClient) -> None:
+    headers = _admin_headers(client)
+    me = client.get("/api/v1/auth/me", headers=headers)
+    assert me.status_code == 200, me.text
+    account_adapter.revoke_sessions(me.json()["id"])
+    denied = client.get("/api/v1/auth/me", headers=headers)
+    assert denied.status_code == 401
+
+
+def test_issue_session_drops_memo(monkeypatch, client: TestClient) -> None:
+    calls = {"n": 0}
+    original = load_authenticated_account
+
+    def wrapped(db):
+        calls["n"] += 1
+        return original(db)
+
+    monkeypatch.setattr("blank_app.authz_hotpath.load_authenticated_account", wrapped)
+    headers = _admin_headers(client)
+    raw = headers["Authorization"].split(" ", 1)[1]
+    token = request_token.set(raw)
+    scope = begin_request_scope()
+    try:
+        user = account_adapter.current_user()
+        assert calls["n"] == 1
+        account_adapter.issue_session(user.id)
+        account_adapter.current_user()
+        assert calls["n"] == 2
+    finally:
+        end_request_scope(scope)
+        request_token.reset(token)
+
+
 def test_revoke_sessions_drops_memo_so_second_current_user_sees_401(client: TestClient) -> None:
     headers = _admin_headers(client)
     raw = headers["Authorization"].split(" ", 1)[1]

@@ -1239,8 +1239,8 @@ def test_local_superuser_keeps_security_capabilities_consistent_with_enforcement
             assert response.status_code != 403, f"{method} {path} -> {response.text}"
 
 
-def test_blank_role_groups_require_current_app_key_and_unexpired_snapshot() -> None:
-    from blank_app.adapters import _snapshot_role_groups
+def test_blank_role_groups_use_current_app_key_snapshot() -> None:
+    from blank_app.authz_hotpath import load_external_authz
 
     now = datetime.now(UTC)
     current_app = f"current-{uuid.uuid4().hex}"
@@ -1265,22 +1265,21 @@ def test_blank_role_groups_require_current_app_key_and_unexpired_snapshot() -> N
         db.add_all([setting, account])
         db.flush()
         account_id = account.id
-        current = PermissionSnapshot(
-            account_id=account.id,
-            external_source="authentik",
-            external_user_id=external_id,
-            app_key=current_app,
-            groups=[{"key": "current", "kind": "role", "name": "Current Role"}],
-            grants=[],
-            grant_version=1,
-            catalog_version=1,
-            snapshot_version="current",
-            fetched_at=now,
-            expires_at=now + timedelta(minutes=5),
-        )
         db.add_all(
             [
-                current,
+                PermissionSnapshot(
+                    account_id=account.id,
+                    external_source="authentik",
+                    external_user_id=external_id,
+                    app_key=current_app,
+                    groups=[{"key": "current", "kind": "role", "name": "Current Role"}],
+                    grants=[],
+                    grant_version=1,
+                    catalog_version=1,
+                    snapshot_version="current",
+                    fetched_at=now,
+                    expires_at=now + timedelta(minutes=5),
+                ),
                 PermissionSnapshot(
                     account_id=account.id,
                     external_source="authentik",
@@ -1299,16 +1298,8 @@ def test_blank_role_groups_require_current_app_key_and_unexpired_snapshot() -> N
         db.commit()
         db.expunge(account)
     try:
-        assert _snapshot_role_groups(account) == ["Current Role"]
-        with SessionLocal() as db:
-            row = (
-                db.query(PermissionSnapshot)
-                .filter(PermissionSnapshot.account_id == account_id, PermissionSnapshot.app_key == current_app)
-                .one()
-            )
-            row.expires_at = now - timedelta(seconds=1)
-            db.commit()
-        assert _snapshot_role_groups(account) == []
+        _grants, groups = load_external_authz(account)
+        assert groups == ["Current Role"]
     finally:
         with SessionLocal() as db:
             db.query(PermissionSnapshot).filter(PermissionSnapshot.account_id == account_id).delete()

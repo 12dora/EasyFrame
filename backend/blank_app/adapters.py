@@ -145,7 +145,6 @@ _passkey_challenge_key = adapter_account._passkey_challenge_key
 _passkey_config = adapter_account._passkey_config
 _persist_passkey_challenge = adapter_account._persist_passkey_challenge
 _snapshot_grants = adapter_account._snapshot_grants
-_snapshot_role_groups = adapter_account._snapshot_role_groups
 _superadmin_grants = adapter_account._superadmin_grants
 account_adapter = adapter_account.account_adapter
 local_account_admin = adapter_account.local_account_admin

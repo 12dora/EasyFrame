@@ -682,37 +682,3 @@ def _superadmin_grants() -> tuple[NormalizedGrant, ...]:
             continue
         grants.append(_facade().NormalizedGrant(code=permission.code, scope=scope))
     return tuple(grants)
-
-
-def _snapshot_role_groups(account: Account) -> list[str]:
-    if not account.external_source or not account.external_user_id:
-        return []
-    # 宿主性能:独立调用仍只读未过期行,不触发拉取;app_key 走短 TTL。
-    from blank_app.authz_cache import cached_app_key
-
-    with _facade().SessionLocal() as db:
-        app_key = cached_app_key(db)
-        if not app_key:
-            return []
-        snapshot = (
-            db.query(_facade().PermissionSnapshot.groups)
-            .filter(
-                _facade().PermissionSnapshot.account_id == account.id,
-                _facade().PermissionSnapshot.app_key == app_key,
-                _facade().PermissionSnapshot.expires_at > _facade().datetime.now(_facade().UTC),
-            )
-            .order_by(_facade().PermissionSnapshot.fetched_at.desc())
-            .first()
-        )
-    if snapshot is None or not isinstance(snapshot.groups, list):
-        return []
-    return _group_names(snapshot.groups)
-
-
-def _group_names(groups: object) -> list[str]:
-    names: list[str] = []
-    for group in groups if isinstance(groups, list) else []:
-        name = group.get("name") if isinstance(group, dict) else None
-        if isinstance(name, str) and name.strip() and name.strip() not in names:
-            names.append(name.strip())
-    return names

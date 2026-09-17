@@ -6,6 +6,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from blank_app.adapters import account_adapter
@@ -151,6 +152,57 @@ def test_invalidate_app_snapshots_sets_expires_at_to_fetched_at() -> None:
     with SessionLocal() as db:
         row = db.query(PermissionSnapshot).filter(PermissionSnapshot.account_id == account.id).one()
         assert row.expires_at == row.fetched_at
+
+
+def test_grant_changed_pull_failure_invalidates_row_and_fail_closes(monkeypatch) -> None:
+    import blank_app.authz_api as authz_api
+    from blank_app.authz_snapshot import refresh_snapshot_for_external_user
+
+    fake = _FakeClient()
+    fake.fail = True
+    monkeypatch.setattr(authz_api, "_permission_client", lambda: fake)
+    account = _account(suffix="grant-fail")
+    _store_snapshot(account, grant_version=1, catalog_version=1, expires_at=datetime.now(UTC) + timedelta(minutes=5))
+    with pytest.raises(HTTPException):
+        refresh_snapshot_for_external_user(account.external_user_id, "9.9")
+    with SessionLocal() as db:
+        row = db.query(PermissionSnapshot).filter(PermissionSnapshot.account_id == account.id).one()
+        assert row.expires_at == row.fetched_at
+    assert snapshot_grants_for_account(account) == ()
+
+
+def test_my_grants_serves_stale_grace_like_auth_me(monkeypatch) -> None:
+    import blank_app.authz_api as authz_api
+    from blank_app.main import app
+
+    fake = _FakeClient()
+    fake.fail = True
+    monkeypatch.setattr(authz_api, "_permission_client", lambda: fake)
+    account = _account(suffix="grace-my-grants")
+    _store_stale_grace(account)
+    headers = {"Authorization": f"Bearer {account_adapter.issue_session(str(account.id))}"}
+    with TestClient(app) as client:
+        me = client.get("/api/v1/auth/me", headers=headers)
+        mine = client.get("/api/v1/authz-integration/my-grants", headers=headers)
+    wait_background_refreshes()
+    assert me.status_code == 200, me.text
+    assert "authz.integration.view" in me.json()["permissions"]
+    assert mine.status_code == 200, mine.text
+    assert mine.json()
+    loaded = authz_api._my_grants(actor_id=str(account.id))
+    assert {item.permission for item in loaded} == set(me.json()["permissions"])
+
+
+def test_future_invalidated_snapshot_is_never_served(monkeypatch) -> None:
+    import blank_app.authz_api as authz_api
+
+    fake = _FakeClient()
+    fake.fail = True
+    monkeypatch.setattr(authz_api, "_permission_client", lambda: fake)
+    account = _account(suffix="future-invalidated")
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    _store_timed_snapshot(account, fetched_at=future, expires_at=future)
+    assert snapshot_grants_for_account(account) == ()
 
 
 def test_unexpired_below_floor_snapshot_still_serves_role_groups(monkeypatch) -> None:
