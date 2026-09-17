@@ -1,6 +1,6 @@
 "use client";
 
-import { MobileNav, Sidebar, Topbar, type NavModel, type NavPanel, type RenderNavLink } from "@easy-enterprise/ui/shell";
+import { MobileNav, Sidebar, Topbar, useNavIntent, type NavModel, type NavPanel, type RenderNavLink } from "@easy-enterprise/ui/shell";
 import { PageLoadingSkeleton } from "@easy-enterprise/ui";
 import { EnterpriseAppFrame, EnterpriseBrandSlot, EnterpriseConfiguredFooter, EnterprisePermissionOnboarding, EnterprisePublicShell, EnterpriseTopbarActions, hasEnterpriseBusinessAccess, performEnterpriseLogout, resolveEnterpriseBrand, resolveEnterpriseFooterHtml, useEnterpriseGeneralSettings } from "@easy-enterprise/ui/enterprise";
 import { MotionConfig } from "motion/react";
@@ -22,13 +22,24 @@ const BlankShellIdentityContext = createContext<ShellIdentity | null>(null);
 export function useBlankShellIdentity() { const identity = useContext(BlankShellIdentityContext); if (!identity) throw new Error("Blank shell identity is not available"); return identity; }
 
 /**
+ * 导航意图的通道:`renderNavLink` 是模块级常量(传给侧栏的 prop 身份保持稳定),
+ * 捞不到外壳闭包里的 `nav.onIntent`,所以走一层 context 传下去。
+ */
+const NavIntentContext = createContext<(href: string) => void>(() => undefined);
+
+/**
  * 侧栏链接:不随进入视口预取(一屏多个入口会在首屏同时打出多次 RSC 请求),
  * 指针悬停 / 键盘聚焦 / 触摸时才预取 —— 真要点的那一个在点下去之前就开始加载了。
+ *
+ * 点击时先同步记下导航意图(`onIntent`),侧栏的选中标记因此在路由提交之前就挪过去;
+ * 这一步必须排在 `onNavigate()`(移动端抽屉关闭等外壳副作用)之前。
  */
 function NavLinkWithIntentPrefetch({ href, active, className, testId, onNavigate, children }: Parameters<RenderNavLink>[0]) {
   const router = useRouter();
+  const onIntent = useContext(NavIntentContext);
   const prefetch = () => router.prefetch(href);
-  return <Link href={href} prefetch={false} aria-current={active ? "page" : undefined} className={className} data-test-id={testId} onClick={onNavigate} onMouseEnter={prefetch} onFocus={prefetch} onTouchStart={prefetch}>{children}</Link>;
+  const onClick = () => { onIntent(href); onNavigate(); };
+  return <Link href={href} prefetch={false} aria-current={active ? "page" : undefined} className={className} data-test-id={testId} onClick={onClick} onMouseEnter={prefetch} onFocus={prefetch} onTouchStart={prefetch}>{children}</Link>;
 }
 
 const renderNavLink: RenderNavLink = (props) => <NavLinkWithIntentPrefetch {...props}/>;
@@ -59,21 +70,26 @@ function ShellTopbar({ locale, pathname, t, identity, brand, canSecurity, canNot
 
 export function BlankShell({ children, locale: rawLocale }: { children: ReactNode; locale: string }) {
   const locale = localeOf(rawLocale); const t = useMemo(() => messages(locale), [locale]); const pathname = usePathname(); const router = useRouter();
-  const [panel, setPanel] = useState<string | null>(pathname.includes("/settings/") ? "settings" : null);
-  const wasInSettings = useRef(pathname.includes("/settings/"));
+  // 导航意图:`usePathname()` 要等 RSC 提交才翻页,远端点侧栏会「不跟手」。`nav.path` 在导航
+  // 落地前就是刚点的那一项,只用来算选中态 / 面板开合;真实 `pathname` 仍归 pathKey、身份
+  // 复查、语言切换等一切会发请求的地方(见 docs/SHELL_NAV_INTENT.md)。
+  const nav = useNavIntent(pathname);
+  const inSettings = nav.path.includes("/settings/");
+  const [panel, setPanel] = useState<string | null>(inSettings ? "settings" : null);
+  const wasInSettings = useRef(inSettings);
   // 生产身份事实来自可信网关/Authentik 注入后由 `/auth/me` 验证；本地 JWT 只是
   // 开发/demo 的可选凭据，不能成为进入框架站的前置门禁。`/auth/session` 只补申请入口。
   const identityLabels = useMemo(() => ({ ...t.identity, separator: t.access.authorization.roleGroupSeparator }), [t]);
   // 身份、强制改密拦截、401 踢人与跨标签页换人都在这个钩子里（感知加载：本标签页快照秒开、
   // `/auth/session` 后台补齐、导航后的例行复查排到空闲）。
   const { identity, permissionUrlPending, refreshIdentity } = useShellIdentity({ locale, pathname, fallbackName: t.brand, identityLabels });
-  useEffect(() => { const inSettings = pathname.includes("/settings/"); if (inSettings && !wasInSettings.current) setPanel("settings"); if (!inSettings) setPanel(null); wasInSettings.current = inSettings; }, [pathname]);
+  useEffect(() => { if (inSettings && !wasInSettings.current) setPanel("settings"); if (!inSettings) setPanel(null); wasInSettings.current = inSettings; }, [inSettings]);
   const canNotifications = Boolean(identity?.permissions.has("notification.center.view"));
   // 通用设置由共享缓存供给：顶栏、页脚与设置页共用一次公开 GET，保存后立即重刷。
   const { settings } = useEnterpriseGeneralSettings(loadGeneralSettings);
   const brand = resolveEnterpriseBrand(settings, locale, { title: t.brand, subtitle: null, logoSrc: brandLogo.src });
   const footer = <EnterpriseConfiguredFooter html={resolveEnterpriseFooterHtml(settings, locale)} fallback={<>{t.public.footer} · © {new Date().getFullYear()}</>}/>;
-  const href = useCallback((path: string) => `/${locale}${path}`, [locale]); const active = useCallback((path: string) => pathname === href(path), [href, pathname]); const activePrefix = useCallback((path: string) => pathname === href(path) || pathname.startsWith(`${href(path)}/`), [href, pathname]);
+  const href = useCallback((path: string) => `/${locale}${path}`, [locale]); const active = useCallback((path: string) => nav.path === href(path), [href, nav.path]); const activePrefix = useCallback((path: string) => nav.path === href(path) || nav.path.startsWith(`${href(path)}/`), [href, nav.path]);
   const canSecurity = Boolean(identity && Object.values(identity.securityCapabilities).some(Boolean));
   const model: NavModel = useMemo(() => {
     const permissions = identity?.permissions ?? new Set<string>();
@@ -91,9 +107,10 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
     ];
     // 示例分组:新宿主复制模板后,连同 `app/[locale]/app/examples` 与 `components/examples` 一起删掉。
     const examplesGroup = { key: "examples", divider: true, nodes: [{ kind: "link" as const, link: { key: "examples-table", testId: "blank-nav-examples-table", label: t.examples.navLabel, href: href("/app/examples/table"), active: activePrefix("/app/examples") } }] };
-    return { groups: [{ key: "main", nodes: [{ kind: "link", link: { key: "dashboard", testId: "blank-nav-dashboard", label: t.navigation.dashboard, href: href("/app"), active: active("/app") } }] }, examplesGroup, ...(settingsItems.length ? [{ key: "system", divider: true, nodes: [{ kind: "panel" as const, panel: { id: "settings", testId: SETTINGS_PANEL_TEST_ID, label: t.navigation.settings, active: pathname.includes("/settings/"), firstHref: settingsItems[0].href, items: settingsItems } }] }] : [])] };
-  }, [active, activePrefix, canSecurity, href, identity, pathname, t]);
-  const openPanel = (next: NavPanel) => { setPanel(next.id); router.push(next.firstHref); };
+    return { groups: [{ key: "main", nodes: [{ kind: "link", link: { key: "dashboard", testId: "blank-nav-dashboard", label: t.navigation.dashboard, href: href("/app"), active: active("/app") } }] }, examplesGroup, ...(settingsItems.length ? [{ key: "system", divider: true, nodes: [{ kind: "panel" as const, panel: { id: "settings", testId: SETTINGS_PANEL_TEST_ID, label: t.navigation.settings, active: inSettings, firstHref: settingsItems[0].href, items: settingsItems } }] }] : [])] };
+  }, [active, activePrefix, canSecurity, href, identity, inSettings, t]);
+  // 面板入口也是一次导航:先记意图,标记与面板立刻就位,再交给 router。
+  const openPanel = (next: NavPanel) => { nav.onIntent(next.firstHref); setPanel(next.id); router.push(next.firstHref); };
   const loading = <main className="mx-auto w-full max-w-6xl p-6" data-test-id="blank-auth-loading"><PageLoadingSkeleton/></main>;
   if (!identity) return loading;
   const topbar = <ShellTopbar locale={locale} pathname={pathname} t={t} identity={identity} brand={brand} canSecurity={canSecurity} canNotifications={canNotifications}/>;
@@ -115,8 +132,8 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
       />
     );
   }
-  const openPanelId = pathname.includes("/settings/") ? panel : null;
-  return <BlankShellIdentityContext.Provider value={identity}><MotionConfig reducedMotion="user"><EnterpriseAppFrame topbar={topbar} sidebar={<SettingsEntryPrefetch firstHref={settingsFirstHref(model)}><Sidebar model={model} openPanelId={openPanelId} onOpenPanel={openPanel} onBack={() => setPanel(null)} renderLink={renderNavLink} backLabel={t.navigation.backToMain} navLabel={t.navigation.menu}/></SettingsEntryPrefetch>} mobileNav={<MobileNav model={model} renderLink={renderNavLink} backLabel={t.navigation.backToMain} menuLabel={t.navigation.menu} closeLabel={t.navigation.close} navLabel={t.navigation.menu} pathKey={pathname}/>} footer={footer} mainClassName="pb-12">{content}</EnterpriseAppFrame></MotionConfig></BlankShellIdentityContext.Provider>;
+  const openPanelId = inSettings ? panel : null;
+  return <BlankShellIdentityContext.Provider value={identity}><NavIntentContext.Provider value={nav.onIntent}><MotionConfig reducedMotion="user"><EnterpriseAppFrame pending={nav.pending} pendingLabel={t.common.loading} topbar={topbar} sidebar={<SettingsEntryPrefetch firstHref={settingsFirstHref(model)}><Sidebar model={model} openPanelId={openPanelId} onOpenPanel={openPanel} onBack={() => setPanel(null)} renderLink={renderNavLink} backLabel={t.navigation.backToMain} navLabel={t.navigation.menu}/></SettingsEntryPrefetch>} mobileNav={<MobileNav model={model} renderLink={renderNavLink} backLabel={t.navigation.backToMain} menuLabel={t.navigation.menu} closeLabel={t.navigation.close} navLabel={t.navigation.menu} pathKey={pathname}/>} footer={footer} mainClassName="pb-12">{content}</EnterpriseAppFrame></MotionConfig></NavIntentContext.Provider></BlankShellIdentityContext.Provider>;
 }
 
 function localizedLocation(pathname: string, locale: string, nextLocale: string) {

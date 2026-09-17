@@ -167,3 +167,5 @@ sessionStorage 只是给下一次页面加载留的底稿。
 - 强制改密账号：除改密页外拿不到身份，且 sessionStorage 里没有任何快照。
 - 零授权引导页：申请入口未知时仍等 `/auth/session`；有业务权限的人不受影响。
 - 401 与会话失效的落点、登录重定向的 `next=` 参数一字未变。
+
+点下侧栏之后到路由提交之间的那段空窗（选中标记与内容列进度条）见 [SHELL_NAV_INTENT.md](./SHELL_NAV_INTENT.md)。
