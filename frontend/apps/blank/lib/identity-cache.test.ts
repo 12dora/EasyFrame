@@ -46,6 +46,7 @@ function identity(overrides: Partial<ShellIdentity> = {}): ShellIdentity {
     accountId: "u1",
     isLocalSuperadmin: false,
     permissionRequestUrl: "https://easyauth.test/request",
+    tableDensity: "compact",
     ...overrides,
   };
 }
@@ -66,6 +67,24 @@ describe("identity snapshot", () => {
     expect(cached?.securityCapabilities.passwordChange).toBe(true);
     expect(cached?.securityCapabilities.totpEnroll).toBe(false);
     expect(cached?.permissionRequestUrl).toBe("https://easyauth.test/request");
+    expect(cached?.tableDensity).toBe("compact");
+  });
+
+  // 行高是账号偏好,快照里也带着它:同一个标签页翻下一页时不该先闪一帧紧凑的表格。
+  it("round-trips the account table density", () => {
+    writeCachedIdentity("zh-CN", identity({ tableDensity: "comfortable" }));
+    clearMemoryOnly();
+    expect(readCachedIdentity("zh-CN")?.tableDensity).toBe("comfortable");
+  });
+
+  // 结构版本(v2)之前写下的快照没有这个字段:整份仍可读,档位回落到全局默认。
+  it("hydrates a snapshot without a density to the default", () => {
+    writeCachedIdentity("zh-CN", identity());
+    const raw = JSON.parse(window.sessionStorage.getItem(CACHE_KEY)!) as { identity: Record<string, unknown> };
+    delete raw.identity.tableDensity;
+    window.sessionStorage.setItem(CACHE_KEY, JSON.stringify(raw));
+    clearMemoryOnly();
+    expect(readCachedIdentity("zh-CN")?.tableDensity).toBe("compact");
   });
 
   // The identity line and the fallback name are localized copy: the other language's copy is wrong.
@@ -81,10 +100,19 @@ describe("identity snapshot", () => {
     expect(window.sessionStorage.getItem(CACHE_KEY)).toBeNull();
   });
 
+  // 结构一变就整份作废,而不是读出半份身份:旧版本号的快照直接当没有。
+  it("ignores a snapshot written by an older structure version", () => {
+    writeCachedIdentity("zh-CN", identity());
+    const raw = JSON.parse(window.sessionStorage.getItem(CACHE_KEY)!) as Record<string, unknown>;
+    window.sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ...raw, v: 1 }));
+    clearMemoryOnly();
+    expect(readCachedIdentity("zh-CN")).toBeNull();
+  });
+
   it("drops a snapshot whose contract fields are wrong", () => {
     window.sessionStorage.setItem(
       CACHE_KEY,
-      JSON.stringify({ v: 1, locale: "zh-CN", identity: { name: "张三", accountId: "u1", identityKind: "root", permissions: [] } }),
+      JSON.stringify({ v: 2, locale: "zh-CN", identity: { name: "张三", accountId: "u1", identityKind: "root", permissions: [] } }),
     );
     expect(readCachedIdentity("zh-CN")).toBeNull();
   });
@@ -258,6 +286,15 @@ describe("reconcileIdentity", () => {
     const merged = reconcileIdentity(identity(), identity({ permissionRequestUrl: null }), true);
     expect(merged.permissionRequestUrl).toBeNull();
   });
+
+  // 行高也来自 `/auth/session`:它落地之前沿用快照里的档位,否则选了「宽松」的人
+  // 每次刷新都要先看一眼紧凑的表格再跳回去;落地之后以服务端的答案为准。
+  it("keeps the snapshot density until the session answers", () => {
+    const cached = identity({ tableDensity: "comfortable" });
+    expect(reconcileIdentity(cached, identity({ tableDensity: "compact" })).tableDensity).toBe("comfortable");
+    expect(reconcileIdentity(cached, identity({ permissionRequestUrl: null, tableDensity: "compact" })).tableDensity).toBe("comfortable");
+    expect(reconcileIdentity(cached, identity({ tableDensity: "compact" }), true).tableDensity).toBe("compact");
+  });
 });
 
 describe("sameIdentity", () => {
@@ -273,6 +310,11 @@ describe("sameIdentity", () => {
   it("rejects a changed capability or label", () => {
     expect(sameIdentity(identity(), identity({ securityCapabilities: CAPABILITIES_OFF }))).toBe(false);
     expect(sameIdentity(identity(), identity({ identity: "管理员" }))).toBe(false);
+  });
+
+  // 换了档位就是屏幕上不一样:外壳必须重画,否则设置页改完列表还停在旧行高。
+  it("rejects a changed table density", () => {
+    expect(sameIdentity(identity(), identity({ tableDensity: "comfortable" }))).toBe(false);
   });
 });
 

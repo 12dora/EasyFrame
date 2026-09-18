@@ -6,6 +6,8 @@ const defaultGeneral = { titleZh: "", titleEn: "", subtitleZh: "", subtitleEn: "
 
 async function mockPlatform(page: Page, general: Record<string, unknown> = defaultGeneral) {
   let stored = { ...general };
+  // 账号偏好(表格行高)住在服务端:`PATCH /auth/preferences` 改的就是这一份,`/auth/session` 再读回去。
+  let preferences: Record<string, unknown> = { tableDensity: "compact" };
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const json = (body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
@@ -14,7 +16,11 @@ async function mockPlatform(page: Page, general: Record<string, unknown> = defau
       return json(stored);
     }
     if (path === "/api/v1/auth/oidc/status") return json({ enabled: false, authorizePath: "" });
-    if (path === "/api/v1/auth/session") return json({ permissionRequestUrl: "https://easyauth.example.test/request" });
+    if (path === "/api/v1/auth/preferences") {
+      preferences = { ...preferences, ...(JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>) };
+      return json({ permissionRequestUrl: "https://easyauth.example.test/request", preferences });
+    }
+    if (path === "/api/v1/auth/session") return json({ permissionRequestUrl: "https://easyauth.example.test/request", preferences });
     if (path === "/api/v1/auth/me") return json({ id: "u1", name: "Framework Admin", email: "admin@example.com", avatarUrl: null, hasLocalPassword: true, permissions: ["auth.totp.create", "auth.totp.advance", "auth.passkey.view", "auth.passkey.create", "identity.integration.view", "identity.integration.manage", "authz.integration.view", "authz.integration.manage", "ops.upstream_health.view", "ops.upstream_health.manage", "notification.center.view", "settings.app_setting.update"], securityCapabilities: { passwordChange: true, totpStatus: true, totpEnroll: true, totpDisable: true, passkeyList: true, passkeyRegister: true, passkeyDelete: true }, grants: [{ permissionCode: "authz.integration.view", dataScope: "ALL" }] });
     if (path === "/api/v1/notifications") return json({ items: [], unreadCount: 0, nextCursor: null });
     if (path === "/api/v1/users/me/totp/status") return json({ enabled: false });
@@ -47,7 +53,7 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(page.locator('[data-test-id="app-footer-html"]')).toContainText(locale === "en" ? "Enterprise framework" : "企业框架");
     await expect(page.locator('[data-test-id="topbar-user-role"]')).toHaveText(locale === "en" ? "User" : "用户");
 
-    for (const [path, marker] of [["general", "general-settings-page"], ["security", "enterprise-security-settings"], ["access", "enterprise-access-settings"], ["upstream", "upstream-health-page"]] as const) { await page.goto(`/${locale}/app/settings/${path}`); await expect(page.locator(`[data-test-id="${marker}"]`)).toBeVisible(); }
+    for (const [path, marker] of [["general", "general-settings-page"], ["appearance", "appearance-settings-page"], ["security", "enterprise-security-settings"], ["access", "enterprise-access-settings"], ["upstream", "upstream-health-page"]] as const) { await page.goto(`/${locale}/app/settings/${path}`); await expect(page.locator(`[data-test-id="${marker}"]`)).toBeVisible(); }
     // 设置页只保留最内层标题，框架不再叠加「设置」大标题；「通用」排在设置菜单首位。
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/${locale}/app/settings/general`);
@@ -92,6 +98,32 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(page.locator('[data-test-id="status-filter-icon"]')).toBeVisible();
     await page.goto(`/${locale}/app/examples/table?status=archived`);
     await expect(page.locator('[data-test-id="status-filter-icon"]')).toHaveAttribute("data-active", "true");
+  });
+  // 表格行高是账号偏好:设置页改一下,写回 `PATCH /auth/preferences`,列表页当场换档,
+  // 刷新之后仍是这一档(值从 `/auth/session` 来,不在浏览器里)。
+  test("table density is an account preference shared by the appearance page and every table", async ({ page }) => {
+    const exampleTable = page.locator('[data-test-id="examples-table"] .ant-table').first();
+    // 缺省是紧凑(antd `size="small"`)。
+    await page.goto(`/${locale}/app/examples/table`);
+    await expect(exampleTable).toHaveClass(/ant-table-small/);
+
+    await page.goto(`/${locale}/app/settings/appearance`);
+    await expect(page.locator('[data-test-id="appearance-settings-page"]')).toBeVisible();
+    await expect(page.locator("main h1")).toHaveText(locale === "en" ? "Appearance" : "外观");
+    const toggle = page.locator('[data-test-id="appearance-density-toggle"]');
+    await expect(toggle.locator('[data-density="compact"]')).toHaveAttribute("data-active", "true");
+
+    const saved = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/v1/auth/preferences" && request.method() === "PATCH");
+    await toggle.locator('[data-density="comfortable"]').click();
+    expect(JSON.parse((await saved).postData() ?? "{}")).toEqual({ tableDensity: "comfortable" });
+    await expect(toggle.locator('[data-density="comfortable"]')).toHaveAttribute("data-active", "true");
+
+    // 同一档位跟到列表页(antd `size="middle"`),并且刷新之后仍然在
+    // —— 值是服务端存的,不在浏览器里。
+    await page.goto(`/${locale}/app/examples/table`);
+    await expect(exampleTable).toHaveClass(/ant-table-medium/);
+    await page.goto(`/${locale}/app/settings/appearance`);
+    await expect(page.locator('[data-test-id="appearance-density-toggle"] [data-density="comfortable"]')).toHaveAttribute("data-active", "true");
   });
   test("public login, logged-out and OIDC callback routes are reachable", async ({ page }) => {
     const response = await page.goto(`/${locale}/login`); await expect(page.locator('[data-test-id="enterprise-login-page"]')).toBeVisible(); await expect(page.locator("main")).toHaveCount(1);
@@ -176,6 +208,10 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(page.locator('[data-test-id="general-settings-page"]')).toBeVisible();
     await expect(page.locator("main h1")).toHaveCount(1);
     await expect(page.locator("main h1")).toHaveText(locale === "en" ? "General" : "通用");
+    // 「外观」只改自己的账号偏好,没有门禁:任何登录用户都进得去。
+    await page.goto(`/${locale}/app/settings/appearance`);
+    await expect(page.locator('[data-test-id="appearance-settings-page"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="permission-denied"]')).toHaveCount(0);
     await page.goto(`/${locale}/app/notifications`);
     await expect(page.locator('[data-test-id="permission-denied"]')).toBeVisible();
   });

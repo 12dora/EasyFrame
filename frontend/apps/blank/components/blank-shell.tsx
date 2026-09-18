@@ -13,6 +13,7 @@ import { enterpriseLogoutAdapter } from "../lib/auth-adapter";
 import { localeOf, messages, type Locale } from "../lib/messages";
 import { BLANK_BUSINESS_PERMISSION_CODES } from "../lib/permissions";
 import { loadGeneralSettings, type ShellIdentity } from "../lib/shell-adapter";
+import { BlankTableDensityProvider } from "./table-density";
 import { onboardingReady, useShellIdentity } from "./use-shell-identity";
 import { useShellNotifications } from "./use-shell-notifications";
 
@@ -20,6 +21,20 @@ export const SETTINGS_PANEL_TEST_ID = "blank-nav-settings";
 
 const BlankShellIdentityContext = createContext<ShellIdentity | null>(null);
 export function useBlankShellIdentity() { const identity = useContext(BlankShellIdentityContext); if (!identity) throw new Error("Blank shell identity is not available"); return identity; }
+
+/**
+ * 身份 context + 跟着身份走的偏好 provider。
+ *
+ * 表格行高是账号偏好(`identity.tableDensity`),所以它的 provider 就该挂在「身份可用」
+ * 的那一层:外壳每包一次身份,行高也就只接一次,设置页与所有列表页读的是同一份档位。
+ */
+function BlankShellIdentityProvider({ value, children }: { value: ShellIdentity; children: ReactNode }) {
+  return (
+    <BlankShellIdentityContext.Provider value={value}>
+      <BlankTableDensityProvider identity={value}>{children}</BlankTableDensityProvider>
+    </BlankShellIdentityContext.Provider>
+  );
+}
 
 /**
  * 导航意图的通道:`renderNavLink` 是模块级常量(传给侧栏的 prop 身份保持稳定),
@@ -113,6 +128,8 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
     // 「通用」是应用级设置，排在账号与运维项之前。
     const settingsItems = [
       ...(canGeneral ? [{ key: "general", label: t.navigation.general, href: href("/app/settings/general"), active: activePrefix("/app/settings/general") }] : []),
+      // 「外观」只改当前账号自己的偏好，没有权限门禁：任何登录用户都进得去。
+      { key: "appearance", label: t.navigation.appearance, href: href("/app/settings/appearance"), active: activePrefix("/app/settings/appearance") },
       ...(canSecurity ? [{ key: "security", label: t.navigation.security, href: href("/app/settings/security"), active: activePrefix("/app/settings/security") }] : []),
       ...(canAccess ? [{ key: "access", label: t.navigation.access, href: href("/app/settings/access"), active: activePrefix("/app/settings/access") }] : []),
       ...(canAccounts ? [{ key: "accounts", label: t.navigation.accounts, href: href("/app/settings/accounts"), active: activePrefix("/app/settings/accounts") }] : []),
@@ -133,7 +150,7 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
   const forcedTarget = `/${locale}/app/settings/security/password`;
   // antd 环境只包一层,受保护内容与强制改密页共用同一个 provider。
   const content = <BlankAntdProvider locale={locale}>{children}</BlankAntdProvider>;
-  if (identity.mustChangePassword && pathname === forcedTarget) return <BlankShellIdentityContext.Provider value={identity}><EnterprisePublicShell topbar={topbar} footer={footer}>{content}</EnterprisePublicShell></BlankShellIdentityContext.Provider>;
+  if (identity.mustChangePassword && pathname === forcedTarget) return <BlankShellIdentityProvider value={identity}><EnterprisePublicShell topbar={topbar} footer={footer}>{content}</EnterprisePublicShell></BlankShellIdentityProvider>;
   if (!hasEnterpriseBusinessAccess({ permissions: identity.permissions, securityCapabilities: identity.securityCapabilities, isLocalSuperadmin: identity.isLocalSuperadmin, businessPermissionCodes: BLANK_BUSINESS_PERMISSION_CODES })) {
     // 引导页的全部内容就是那个申请入口，没它不成页 —— 只有这一页会等 `/auth/session`。
     if (!onboardingReady(identity, permissionUrlPending)) return loading;
@@ -152,7 +169,7 @@ export function BlankShell({ children, locale: rawLocale }: { children: ReactNod
   // 手机上只留一条头部栏:汉堡按钮进 `Topbar` 的 `leading` 槽(`variant="trigger"`),
   // 框架不再收 `mobileNav`(分区栏整条去掉,正文从 114px 提到 57px 开始);页脚见 docs/SHELL_MOBILE.md。
   const mobileNav = <MobileNav variant="trigger" model={model} renderLink={renderNavLink} backLabel={t.navigation.backToMain} menuLabel={t.navigation.menu} closeLabel={t.navigation.close} navLabel={t.navigation.menu} pathKey={pathname} footer={drawerFooter}/>;
-  return <BlankShellIdentityContext.Provider value={identity}><NavIntentContext.Provider value={nav.onIntent}><MotionConfig reducedMotion="user"><EnterpriseAppFrame pending={nav.pending} pendingLabel={t.common.loading} topbar={<ShellTopbar {...topbarProps} leading={mobileNav}/>} sidebar={<SettingsEntryPrefetch firstHref={settingsFirstHref(model)}><Sidebar model={model} openPanelId={openPanelId} onOpenPanel={openPanel} onBack={() => setPanel(null)} renderLink={renderNavLink} backLabel={t.navigation.backToMain} navLabel={t.navigation.menu}/></SettingsEntryPrefetch>} footer={footer} mainClassName="pb-6 md:pb-12">{content}</EnterpriseAppFrame></MotionConfig></NavIntentContext.Provider></BlankShellIdentityContext.Provider>;
+  return <BlankShellIdentityProvider value={identity}><NavIntentContext.Provider value={nav.onIntent}><MotionConfig reducedMotion="user"><EnterpriseAppFrame pending={nav.pending} pendingLabel={t.common.loading} topbar={<ShellTopbar {...topbarProps} leading={mobileNav}/>} sidebar={<SettingsEntryPrefetch firstHref={settingsFirstHref(model)}><Sidebar model={model} openPanelId={openPanelId} onOpenPanel={openPanel} onBack={() => setPanel(null)} renderLink={renderNavLink} backLabel={t.navigation.backToMain} navLabel={t.navigation.menu}/></SettingsEntryPrefetch>} footer={footer} mainClassName="pb-6 md:pb-12">{content}</EnterpriseAppFrame></MotionConfig></NavIntentContext.Provider></BlankShellIdentityProvider>;
 }
 
 function localizedLocation(pathname: string, locale: string, nextLocale: string) {

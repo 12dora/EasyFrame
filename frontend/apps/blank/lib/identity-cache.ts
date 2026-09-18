@@ -1,6 +1,7 @@
 "use client";
 
 import { clearAsyncDataCache } from "./async-data-cache";
+import { DEFAULT_TABLE_DENSITY, type TableDensity } from "@easy-enterprise/ui/table";
 import type { SecurityCapabilities, ShellIdentity } from "./shell-adapter";
 
 /**
@@ -29,7 +30,7 @@ import type { SecurityCapabilities, ShellIdentity } from "./shell-adapter";
 
 const CACHE_KEY = "blank.shell.identity";
 /** Structure version: bump it whenever `ShellIdentity` changes so old snapshots are discarded whole. */
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 
 const CAPABILITY_KEYS = [
   "passwordChange",
@@ -103,6 +104,11 @@ function flag(value: unknown): boolean {
   return value === true;
 }
 
+/** Only the two known steps count; a snapshot without the field falls back to the global default. */
+function density(value: unknown): TableDensity {
+  return value === "comfortable" || value === "compact" ? value : DEFAULT_TABLE_DENSITY;
+}
+
 function toCapabilities(value: unknown): SecurityCapabilities {
   const source = isRecord(value) ? value : {};
   const entries = CAPABILITY_KEYS.map((key) => [key, flag(source[key])] as const);
@@ -133,6 +139,7 @@ function toIdentity(value: unknown): ShellIdentity | null {
     accountId,
     isLocalSuperadmin: flag(value.isLocalSuperadmin),
     permissionRequestUrl: nullableText(value.permissionRequestUrl),
+    tableDensity: density(value.tableDensity),
   };
 }
 
@@ -202,7 +209,7 @@ function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): b
 
 /** Whether two identities are indistinguishable on screen — the repaint predicate after a reconcile. */
 export function sameIdentity(left: ShellIdentity, right: ShellIdentity): boolean {
-  const scalarKeys = ["name", "identity", "identityKind", "email", "avatarUrl", "hasLocalPassword", "mustChangePassword", "accountId", "isLocalSuperadmin", "permissionRequestUrl"] as const;
+  const scalarKeys = ["name", "identity", "identityKind", "email", "avatarUrl", "hasLocalPassword", "mustChangePassword", "accountId", "isLocalSuperadmin", "permissionRequestUrl", "tableDensity"] as const;
   if (scalarKeys.some((key) => left[key] !== right[key])) return false;
   if (CAPABILITY_KEYS.some((key) => left.securityCapabilities[key] !== right.securityCapabilities[key])) return false;
   return sameStringSet(left.permissions, right.permissions);
@@ -216,11 +223,17 @@ export function sameIdentity(left: ShellIdentity, right: ShellIdentity): boolean
  * `sessionSettled` turns that carry-over off: once `/auth/session` has answered, its answer is
  * authoritative even when it is null. Without it a URL that has since been un-configured would
  * survive every same-tab reload, because the snapshot keeps re-supplying it.
+ *
+ * The table density comes from `/auth/session` too, so it follows the same rule: keep the
+ * snapshot's step until the session lands, otherwise someone who picked "comfortable" would see
+ * one compact frame on every reload before it snapped back.
  */
 export function reconcileIdentity(cached: ShellIdentity | null, fresh: ShellIdentity, sessionSettled = false): ShellIdentity {
   if (!cached || cached.accountId !== fresh.accountId) return fresh;
-  if (sessionSettled || fresh.permissionRequestUrl !== null || cached.permissionRequestUrl === null) return fresh;
-  return { ...fresh, permissionRequestUrl: cached.permissionRequestUrl };
+  if (sessionSettled) return fresh;
+  const tableDensity = cached.tableDensity;
+  if (fresh.permissionRequestUrl !== null || cached.permissionRequestUrl === null) return { ...fresh, tableDensity };
+  return { ...fresh, permissionRequestUrl: cached.permissionRequestUrl, tableDensity };
 }
 
 /** First-paint yield window: run when the browser goes idle, or at this deadline at the latest. */

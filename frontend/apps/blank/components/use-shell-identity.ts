@@ -86,12 +86,13 @@ function useIdentityLoader(params: IdentityLoaderParams): void {
         .then(({ identity, session }) => {
           if (!alive) return;
           applyIdentity(identity);
-          void session.then((permissionRequestUrl) => {
+          void session.then((settled) => {
             if (!alive) return;
             onSessionSettled();
             // Authoritative, null included: a URL that was un-configured must not keep coming
-            // back out of the snapshot on every same-tab reload.
-            applyIdentity({ ...identity, permissionRequestUrl }, true);
+            // back out of the snapshot on every same-tab reload. Same for the row density —
+            // a step changed elsewhere is settled by this answer.
+            applyIdentity({ ...identity, permissionRequestUrl: settled.permissionRequestUrl, tableDensity: settled.tableDensity }, true);
           });
         })
         .catch((cause: unknown) => { if (alive) onFailure(cause); });

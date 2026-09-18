@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ShellIdentity, ShellIdentityLoad } from "../lib/shell-adapter";
+import type { ShellIdentity, ShellIdentityLoad, ShellSession } from "../lib/shell-adapter";
 
 /**
  * The shell identity (perceived loading).
@@ -51,16 +51,17 @@ function identity(overrides: Partial<ShellIdentity> = {}): ShellIdentity {
     accountId: "u1",
     isLocalSuperadmin: false,
     permissionRequestUrl: null,
+    tableDensity: "compact",
     ...overrides,
   };
 }
 
 /** `/auth/me` and `/auth/session` controlled separately. */
-function stubLoad(value: ShellIdentity): { settleSession: (url: string | null) => void } {
-  let settle: (url: string | null) => void = () => undefined;
-  const session = new Promise<string | null>((resolve) => { settle = resolve; });
+function stubLoad(value: ShellIdentity): { settleSession: (url: string | null, tableDensity?: ShellSession["tableDensity"]) => void } {
+  let settle: (session: ShellSession) => void = () => undefined;
+  const session = new Promise<ShellSession>((resolve) => { settle = resolve; });
   startShellIdentityLoad.mockResolvedValue({ identity: value, session } satisfies ShellIdentityLoad);
-  return { settleSession: (url) => settle(url) };
+  return { settleSession: (url, tableDensity = "compact") => settle({ permissionRequestUrl: url, tableDensity }) };
 }
 
 let refresh: () => Promise<void> = () => Promise.resolve();
@@ -74,6 +75,7 @@ function Probe({ locale = "zh-CN", pathname = "/zh-CN/app" }: { locale?: Locale;
       data-name={value?.name ?? ""}
       data-account={value?.accountId ?? ""}
       data-url={value?.permissionRequestUrl ?? ""}
+      data-density={value?.tableDensity ?? ""}
       data-pending={String(permissionUrlPending)}
     />
   );
@@ -131,6 +133,19 @@ describe("useShellIdentity", () => {
     await act(async () => { settleSession("https://easyauth.test/request"); await Promise.resolve(); });
     expect(probe().dataset.url).toBe("https://easyauth.test/request");
     expect(probe().dataset.pending).toBe("false");
+  });
+
+  // The density is an account preference carried by `/auth/session`: the snapshot's step holds the
+  // screen until the session lands, then the server's answer wins.
+  it("takes the account density from the settled session", async () => {
+    writeCachedIdentity("zh-CN", identity({ tableDensity: "comfortable" }));
+    const { settleSession } = stubLoad(identity());
+    render();
+    await flush();
+    expect(probe().dataset.density).toBe("comfortable");
+
+    await act(async () => { settleSession(null, "compact"); await Promise.resolve(); });
+    expect(probe().dataset.density).toBe("compact");
   });
 
   // Snapshot reuse: the second page opened in this tab no longer waits for `/auth/me`.

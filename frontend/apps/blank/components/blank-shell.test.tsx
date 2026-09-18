@@ -76,6 +76,7 @@ function identity(overrides: Partial<ShellIdentity> = {}): ShellIdentity {
     accountId: "u1",
     isLocalSuperadmin: false,
     permissionRequestUrl: null,
+    tableDensity: "compact",
     ...overrides,
   };
 }

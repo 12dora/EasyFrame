@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MobileColumn } from "@easy-enterprise/ui/table";
+import { TableDensityProvider, type MobileColumn, type TableDensity } from "@easy-enterprise/ui/table";
 import type { TableQueryState } from "../../lib/table-query";
 import { messages } from "../../lib/messages";
 import { TableExample, exampleColumns } from "./table-example";
@@ -109,6 +109,13 @@ function renderPhone(locale: "zh-CN" | "en") {
   act(() => root.render(<TableExample locale={locale} />));
 }
 
+/** 桌面形态,外面套一层行高上下文——外壳里挂的就是这一层。 */
+function renderDesktop(density?: TableDensity) {
+  stubViewport(false);
+  const page = <TableExample locale="zh-CN" />;
+  act(() => root.render(density ? <TableDensityProvider value={density} onChange={() => undefined}>{page}</TableDensityProvider> : page));
+}
+
 function byTestId(testId: string): HTMLElement | null {
   return container.querySelector<HTMLElement>(`[data-test-id="${testId}"]`);
 }
@@ -162,5 +169,23 @@ describe("示例表在手机上的卡片形态", () => {
       "Owner",
       "Updated",
     ]);
+  });
+});
+
+/**
+ * 行高是账号偏好,示例表(以及宿主抄它写出来的每一张表)只管读上下文:
+ * 页面自己不传 `density`,也不落盘,档位由外壳上的 `TableDensityProvider` 给。
+ */
+describe("示例表的行高跟随账号偏好", () => {
+  it("紧凑 → antd small,宽松 → antd medium", () => {
+    renderDesktop("compact");
+    expect(container.querySelector(".ant-table")?.classList.contains("ant-table-small")).toBe(true);
+    renderDesktop("comfortable");
+    expect(container.querySelector(".ant-table")?.classList.contains("ant-table-medium")).toBe(true);
+  });
+
+  it("没有 Provider 时回落到全站默认(紧凑)", () => {
+    renderDesktop();
+    expect(container.querySelector(".ant-table")?.classList.contains("ant-table-small")).toBe(true);
   });
 });
