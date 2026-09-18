@@ -184,10 +184,22 @@ class CurrentUser(PlatformModel):
     security_capabilities: SecurityCapabilities = Field(default_factory=SecurityCapabilities)
 
 
+TableDensity = Literal["compact", "comfortable"]
+
+
+class UiPreferences(PlatformModel):
+    table_density: TableDensity = "compact"
+
+
+class UiPreferencesUpdate(StrictPlatformModel):
+    table_density: TableDensity | None = None
+
+
 class AuthSession(PlatformModel):
-    """登录态会话附属信息:仅权限申请入口,不带回接入状态或密钥。"""
+    """登录态会话附属信息:权限申请入口与账号 UI 偏好,不带回接入状态或密钥。"""
 
     permission_request_url: str | None = None
+    preferences: UiPreferences = Field(default_factory=UiPreferences)
 
 
 NotificationLevel = Literal["info", "success", "warning", "error"]

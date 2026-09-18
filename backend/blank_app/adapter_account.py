@@ -6,9 +6,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from blank_app.models import (
-    Account,
-)
+from blank_app.adapter_preferences import UiPreferencesMixin
+from blank_app.models import Account
 from enterprise_platform import passkeys as shared_passkeys
 from enterprise_platform.authz import (
     CatalogPermission,
@@ -123,7 +122,7 @@ def _account_projection(account: Account, *, has_passkey: bool) -> LocalAccount:
     )
 
 
-class BlankAccountAdapter:
+class BlankAccountAdapter(UiPreferencesMixin):
     def authenticate_password(self, username: str, password: str) -> LocalAccount | None:
         with _facade().SessionLocal() as db:
             account = (

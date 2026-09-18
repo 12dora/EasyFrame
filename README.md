@@ -79,6 +79,11 @@ blank 模板已经把三处接线做好,复制成新宿主时原样保留:
 写一张表:`const CONFIG = {...} as const satisfies TableQueryConfig`(必须是模块常量或
 `useMemo`,否则每渲染都会重建列、把用户刚打开的漏斗关掉)→ `useTableQuery(CONFIG)` →
 `searchColumn` / `filterColumn` / `sortColumn` / `withEllipsis` 装饰列 → `DataTable`。
+行高(紧凑/宽松)是**账号偏好**，不是页面自己的 prop：外壳上挂着 EasyUI 的 `TableDensityProvider`
+(`frontend/apps/blank/components/table-density.tsx`)，`DataTable` / `ClientTable` 各自读它，
+入口在**设置 → 外观**，值走 `/auth/session` 的 `preferences.tableDensity` 与 `PATCH /auth/preferences`
+(见 [docs/TABLE_DENSITY.md](docs/TABLE_DENSITY.md))。写表格时不用管它。
+
 可运行的样板在 `frontend/apps/blank/components/examples/table-example.tsx`
 (路由 `/[locale]/app/examples/table`,导航里的「示例」项),**新宿主接入真实列表后请连同
 `app/[locale]/app/examples`、`components/examples`、`lib/messages.ts` 的 `examples` 文案块与
@@ -106,6 +111,7 @@ make blank-e2e                         # = pnpm --dir frontend blank:e2e(Playwri
 - [docs/PERMISSION_ONBOARDING.md](docs/PERMISSION_ONBOARDING.md) — 零授权账号引导页、`GET /auth/session` 与宿主接线清单
 - [docs/SHELL_PERCEIVED_LOADING.md](docs/SHELL_PERCEIVED_LOADING.md) — 外壳身份的感知加载（只等 `/auth/me`、本标签页快照、空闲复查）与宿主接入清单
 - [docs/SHELL_MOBILE.md](docs/SHELL_MOBILE.md) — 外壳的手机形态（一条头部栏、页脚传两遍、列表换卡片）与宿主镜像清单
+- [docs/TABLE_DENSITY.md](docs/TABLE_DENSITY.md) — 表格密度（紧凑/宽松，按账号保存）的线合同、外壳接线与宿主镜像清单
 
 ## 许可
 

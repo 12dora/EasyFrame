@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from enterprise_platform.assembly.dependencies import AssemblyDependencies
 from enterprise_platform.assembly.passkey_routes import register_passkey_routes
 from enterprise_platform.assembly.totp_routes import register_totp_routes
-from enterprise_platform.schemas import AuthSession, ChangePasswordRequest, CurrentUser
+from enterprise_platform.schemas import (
+    AuthSession,
+    ChangePasswordRequest,
+    CurrentUser,
+    TableDensity,
+    UiPreferences,
+    UiPreferencesUpdate,
+)
+
+_TABLE_DENSITY_VALUES = frozenset({"compact", "comfortable"})
 
 
 def register_account_routes(router: APIRouter, ctx: AssemblyDependencies) -> None:
     _register_me(router, ctx)
     _register_session(router, ctx)
+    _register_preferences(router, ctx)
     _register_logout(router, ctx)
     _register_change_password(router, ctx)
     register_totp_routes(router, ctx)
@@ -28,8 +40,54 @@ def _register_me(router: APIRouter, ctx: AssemblyDependencies) -> None:
 def _register_session(router: APIRouter, ctx: AssemblyDependencies) -> None:
     @router.get("/auth/session", response_model=AuthSession, tags=["auth"])
     def get_session(user: CurrentUser = Depends(ctx.recovery_user)) -> AuthSession:
-        del user
-        return AuthSession(permission_request_url=_permission_request_url(ctx))
+        return _auth_session(ctx, user)
+
+
+def _register_preferences(router: APIRouter, ctx: AssemblyDependencies) -> None:
+    @router.patch("/auth/preferences", response_model=AuthSession, tags=["auth"])
+    def patch_preferences(body: UiPreferencesUpdate, user: CurrentUser = Depends(ctx.recovery_user)) -> AuthSession:
+        _save_preferences(ctx, user, body)
+        return _auth_session(ctx, user)
+
+
+def _auth_session(ctx: AssemblyDependencies, user: CurrentUser) -> AuthSession:
+    return AuthSession(
+        permission_request_url=_permission_request_url(ctx),
+        preferences=_session_preferences(ctx, user.id),
+    )
+
+
+def _session_preferences(ctx: AssemblyDependencies, account_id: str) -> UiPreferences:
+    return _preferences_from_raw(_load_ui_preferences(ctx, account_id))
+
+
+def _load_ui_preferences(ctx: AssemblyDependencies, account_id: str) -> dict[str, Any]:
+    getter = getattr(ctx.ports.account, "get_ui_preferences", None)
+    if not callable(getter):
+        return {}
+    raw = ctx.port_call(lambda: getter(account_id))
+    return raw if isinstance(raw, dict) else {}
+
+
+def _preferences_from_raw(raw: dict[str, Any]) -> UiPreferences:
+    value = raw.get("table_density", raw.get("tableDensity"))
+    density: TableDensity = value if value in _TABLE_DENSITY_VALUES else "compact"
+    return UiPreferences(table_density=density)
+
+
+def _save_preferences(ctx: AssemblyDependencies, user: CurrentUser, body: UiPreferencesUpdate) -> None:
+    patch = body.model_dump(exclude_unset=True, exclude_none=True)
+    if not patch:
+        return
+    before = _session_preferences(ctx, user.id)
+    ctx.port_call(lambda: ctx.ports.account.update_ui_preferences(user.id, patch))
+    after = _session_preferences(ctx, user.id)
+    ctx.hooks.after_event(
+        user.id,
+        "auth.preferences.update",
+        {"tableDensity": before.table_density},
+        {"tableDensity": after.table_density},
+    )
 
 
 def _permission_request_url(ctx: AssemblyDependencies) -> str | None:

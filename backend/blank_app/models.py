@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -41,6 +42,7 @@ class Account(BlankBase):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     ui_locale: Mapped[str] = mapped_column(String(10), default="zh-CN", server_default="zh-CN")
+    ui_preferences: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, server_default="{}")
     totp_secret: Mapped[str | None] = mapped_column(String(100))
     totp_pending_secret: Mapped[str | None] = mapped_column(String(100))
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))

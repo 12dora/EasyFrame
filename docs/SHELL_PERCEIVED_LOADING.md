@@ -21,8 +21,9 @@ SSR 骨架屏 → hydration → await Promise.all([GET /auth/me, GET /auth/sessi
 ### 1. 只等 `/auth/me`（`lib/shell-adapter.ts`）
 
 `startShellIdentityLoad(fallbackName, identityLabels)` 把两条请求放在同一个 tick 发出，只 `await`
-`/auth/me`，交回一个**永不 reject** 的 `session: Promise<string | null>`（失败 / 超时都回 `null`）。
-身份里的 `permissionRequestUrl` 先给 `null`，由调用方在后台补。
+`/auth/me`，交回一个**永不 reject** 的 `session: Promise<ShellSession>`（失败 / 超时都回缺省值）。
+身份里的 `permissionRequestUrl` 先给 `null`、`tableDensity` 先给缺省档，由调用方在后台补
+（行高偏好见 [TABLE_DENSITY.md](TABLE_DENSITY.md)）。
 
 `loadShellIdentity(fallbackName, identityLabels)` 保留为薄封装（= 新 API + `await session`），
 签名与返回类型不变，既有调用方与契约测试不受影响。
@@ -37,7 +38,8 @@ sessionStorage 只是给下一次页面加载留的底稿。
 - **不会 hydration 不匹配**：`getServerSnapshot` 恒为 `null` → SSR 与 hydration 首帧仍是骨架屏，
   hydration 完成后 React 才按快照重画。也因此不需要「effect 里 setState」。
 - **对账**（`reconcileIdentity`）：`accountId` 相同 → 用真身份；不同 → 整份替换重画。
-  `/auth/session` 还在途时沿用快照里的申请入口，引导页按钮不会先消失再出现；
+  `/auth/session` 还在途时沿用快照里的申请入口与行高档位，引导页按钮不会先消失再出现，
+  选了「宽松」的人也不会每次刷新都先看一眼紧凑的表格；
   一旦 `/auth/session` 落地（第三个参数 `sessionSettled = true`），**它的答案即权威，`null` 也算**
   ——否则一个已被取消配置的申请地址会靠快照在同标签页每次刷新时复活。
 - **等价即不动**（`sameIdentity`）：导航后的例行复查不该让整棵树重渲染。
@@ -118,8 +120,8 @@ sessionStorage 只是给下一次页面加载留的底稿。
 
 | 文件 | 改动 |
 |---|---|
-| `lib/shell-adapter.ts` | `ShellIdentity` 加 `permissionRequestUrl: string \| null`；新增 `ShellIdentityLoad` / `startShellIdentityLoad` / 抽出 `toShellIdentity`；`loadShellIdentity` 改为薄封装 |
-| `lib/identity-cache.ts` | **整份新增**，只改 `CACHE_KEY` 为本宿主前缀（模板：`blank.shell.identity`） |
+| `lib/shell-adapter.ts` | `ShellIdentity` 加 `permissionRequestUrl: string \| null` 与 `tableDensity`；新增 `ShellSession` / `ShellIdentityLoad` / `startShellIdentityLoad` / 抽出 `toShellIdentity`；`loadShellIdentity` 改为薄封装 |
+| `lib/identity-cache.ts` | **整份新增**，只改 `CACHE_KEY` 为本宿主前缀（模板：`blank.shell.identity`）；字段变动时 `CACHE_VERSION` +1（模板当前为 2，随 `tableDensity` 入快照而升） |
 | `lib/auth-adapter.ts` | 导出 `AUTH_TOKEN_STORAGE_KEY`（跨标签页 `storage` 监听要按它过滤）；新增 `endLocalSession`；`clearLocalSession` 改指它 |
 | `components/use-shell-identity.ts` | **整份新增**（宿主若已有同名钩子则按此重写）；`BLANK_AUTH_INVALIDATED_EVENT`、登录路径、强制改密路径按本宿主改 |
 | `components/blank-shell.tsx` | 三个 effect（身份 / session / auth-invalidated）整体换成 `useShellIdentity`；`permissionRequestUrl` 改读 `identity.permissionRequestUrl`；引导页门禁改 `onboardingReady`；`onRecheck` 改 `refreshIdentity` |

@@ -31,6 +31,7 @@ def _prefix_rules(groups: PlatformRouteGroups, include_authz_integration: bool) 
         _PrefixRule("/users/me/passkeys", lambda: groups.passkeys),
         _PrefixRule("/auth/me", lambda: groups.me, exact=True),
         _PrefixRule("/auth/session", lambda: groups.me, exact=True),
+        _PrefixRule("/auth/preferences", lambda: groups.me, exact=True),
         _PrefixRule("/auth/logout", lambda: logout, exact=True),
         _PrefixRule("/users/me/password", lambda: groups.password, exact=True),
         _PrefixRule("/users/me/totp", lambda: groups.totp),

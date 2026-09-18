@@ -59,7 +59,7 @@ EasyTrade 非镜像路径：`app/api/v1/app_settings.py` + `app_settings` 表，
 - 保存后事件由 surface 自己经 `primeEnterpriseGeneralSettings` 广播 `enterprise-starter:general-updated`（原 `footer-updated` 已退役），宿主**不要**再手写一次 `dispatchEvent`。
 - 顶栏品牌槽：登录前后两个壳（`components/blank-public-shell.tsx`、`components/blank-shell.tsx`）都用 `useEnterpriseGeneralSettings(loadGeneralSettings)` 取共享缓存，再用 `resolveEnterpriseBrand(settings, locale, fallback)` 算出名称/副标题/标志交给 `EnterpriseBrandSlot`（`renderLink` 传 Next `Link`）。宿主兜底 = i18n 应用名 + `subtitle: null` + `assets/brand/jiefa_logo.webp` 的静态导入；副标题只在后台配置过时才出现。测试标识：应用内 `app-brand`，公开页 `public-brand`。
 - 页脚：两个壳都用 `resolveEnterpriseFooterHtml(settings, locale)` 喂 `EnterpriseConfiguredFooter`。登录后的框架用 `EnterpriseAppFrame`（`footer` 为必填的 `AppShell`），页脚不会再因为漏传而消失。
-- 设置菜单：`general` 排在首位（`security` / `access` / `accounts` / `upstream` 依次在后），可见性由 `settings.app_setting.update` 决定。
+- 设置菜单：`general` 排在首位（`appearance` / `security` / `access` / `accounts` / `upstream` 依次在后），可见性由 `settings.app_setting.update` 决定；`appearance`（外观，见 [TABLE_DENSITY.md](TABLE_DENSITY.md)）只改账号自己的偏好，没有门禁，恒显示。
 - 设置页框架：`EnterpriseSettingsPageFrame` 只负责宽度与居中，不再有 `title`；`BlankSettingsFrame` 与 `app/[locale]/app/settings/layout.tsx` 都不再传标题，每个设置页自带唯一 `PageHeader`。
 - 身份标签：`loadShellIdentity(fallbackName, identityLabels)` 用 `resolveEnterpriseIdentityLabel` 得到顶栏用户菜单里的 `identity` 与 `identityKind`（超管 → 管理员；有授权组 → 组名；仅有权限 → 用户；否则游客）。文案取共享目录的 `identity`，分隔符取 `access.authorization.roleGroupSeparator`。
 - 文案：`navigation.general` 与 `generalSettings` 都由 `createEnterpriseLabelCatalog` 提供，宿主 `lib/messages.ts` 只补自有条目（如 `navigation.accounts`），不要复制整份目录。
