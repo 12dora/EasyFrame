@@ -56,6 +56,7 @@ def _general_body(**overrides: object) -> dict[str, object]:
         "footerHtmlZh": "企业应用 · © {year}",
         "footerHtmlEn": "Enterprise App · © {year}",
         "logoDataUrl": None,
+        "showFooter": True,
     }
     body.update(overrides)
     return body
@@ -102,6 +103,7 @@ def test_unauthenticated_get_general_returns_defaults() -> None:
             "footerHtmlZh": "企业应用 · © {year}",
             "footerHtmlEn": "Enterprise App · © {year}",
             "logoDataUrl": None,
+            "showFooter": True,
         }
 
 
@@ -192,6 +194,7 @@ def test_get_general_falls_back_to_legacy_footer_row() -> None:
         assert response.json()["footerHtmlEn"] == "legacy en"
         assert response.json()["titleZh"] == ""
         assert response.json()["logoDataUrl"] is None
+        assert response.json()["showFooter"] is True
 
 
 @pytest.mark.parametrize(
@@ -275,7 +278,9 @@ def test_put_footer_shim_leaves_title_and_logo_untouched() -> None:
         saved = client.put(
             _GENERAL,
             headers=headers,
-            json=_general_body(titleZh="保留", titleEn="Keep", logoDataUrl=logo, footerHtmlEn="before"),
+            json=_general_body(
+                titleZh="保留", titleEn="Keep", logoDataUrl=logo, footerHtmlEn="before", showFooter=False
+            ),
         )
         assert saved.status_code == 200, saved.text
         shim = client.put(_FOOTER, headers=headers, json={"footerHtmlZh": "新页脚", "footerHtmlEn": "new footer"})
@@ -286,3 +291,62 @@ def test_put_footer_shim_leaves_title_and_logo_untouched() -> None:
         assert general["titleEn"] == "Keep"
         assert general["logoDataUrl"] == logo
         assert general["footerHtmlEn"] == "new footer"
+        assert general["showFooter"] is False
+
+
+def test_put_general_round_trips_show_footer_false() -> None:
+    from blank_app.database import SessionLocal
+    from blank_app.main import app
+    from blank_app.models import PlatformSetting
+
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        saved = client.put(_GENERAL, headers=headers, json=_general_body(showFooter=False))
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["showFooter"] is False
+        assert client.get(_GENERAL).json()["showFooter"] is False
+        with SessionLocal() as db:
+            row = db.get(PlatformSetting, "general")
+            assert row is not None
+            assert row.value["show_footer"] is False
+
+
+def test_put_general_omitting_show_footer_preserves_stored_false() -> None:
+    from blank_app.main import app
+
+    with TestClient(app) as client:
+        headers = _admin_headers(client)
+        saved = client.put(_GENERAL, headers=headers, json=_general_body(showFooter=False))
+        assert saved.status_code == 200, saved.text
+        omitted = _general_body(titleZh="仍隐藏页脚")
+        omitted.pop("showFooter")
+        updated = client.put(_GENERAL, headers=headers, json=omitted)
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["showFooter"] is False
+        assert updated.json()["titleZh"] == "仍隐藏页脚"
+        assert client.get(_GENERAL).json()["showFooter"] is False
+
+
+def test_get_general_missing_stored_show_footer_defaults_true() -> None:
+    from blank_app.database import SessionLocal
+    from blank_app.main import app
+    from blank_app.models import PlatformSetting
+
+    with SessionLocal() as db:
+        db.add(
+            PlatformSetting(
+                key="general",
+                value={
+                    "title_zh": "",
+                    "title_en": "",
+                    "subtitle_zh": "",
+                    "subtitle_en": "",
+                    "footer_html_zh": "企业应用 · © {year}",
+                    "footer_html_en": "Enterprise App · © {year}",
+                    "logo_data_url": None,
+                },
+            )
+        )
+        db.commit()
+    with TestClient(app) as client:
+        assert client.get(_GENERAL).json()["showFooter"] is True

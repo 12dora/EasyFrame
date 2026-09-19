@@ -52,6 +52,7 @@ def _blank_general(*, footer_html_zh: str, footer_html_en: str) -> GeneralSettin
         footer_html_zh=footer_html_zh,
         footer_html_en=footer_html_en,
         logo_data_url=None,
+        show_footer=True,
     )
 
 

@@ -455,3 +455,4 @@ def test_public_get_general_defaults_and_footer_shim() -> None:
         assert payload["footerHtmlEn"] == footer.json()["footerHtmlEn"] == "Enterprise App · © {year}"
         assert payload["titleZh"] == payload["titleEn"] == ""
         assert payload["logoDataUrl"] is None
+        assert payload["showFooter"] is True

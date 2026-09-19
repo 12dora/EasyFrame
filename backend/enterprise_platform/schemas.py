@@ -137,6 +137,7 @@ class GeneralSettings(PlatformModel):
     footer_html_zh: str
     footer_html_en: str
     logo_data_url: str | None = None
+    show_footer: bool = True
 
 
 class GeneralSettingsUpdate(StrictPlatformModel):
@@ -147,6 +148,7 @@ class GeneralSettingsUpdate(StrictPlatformModel):
     footer_html_zh: str = Field(max_length=20_000)
     footer_html_en: str = Field(max_length=20_000)
     logo_data_url: str | None = None
+    show_footer: bool | None = None
 
     @field_validator("title_zh", "title_en", "subtitle_zh", "subtitle_en", mode="before")
     @classmethod

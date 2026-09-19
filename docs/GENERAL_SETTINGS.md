@@ -1,6 +1,6 @@
 # 通用设置
 
-通用设置替换原先的双语页脚设置：同一条记录保存每语言的应用名称、副标题、页脚 HTML，以及一枚可选标志。空名称/副标题/标志表示「使用宿主默认」（前端回落到 i18n 品牌与默认标志资源）；后端不为这三项编造默认值。页脚 HTML 的缺省值仍由宿主提供（blank 为 `企业应用 · © {year}` / `Enterprise App · © {year}`）。`{year}` 由前端页脚组件替换，后端不展开。
+通用设置替换原先的双语页脚设置：同一条记录保存每语言的应用名称、副标题、页脚 HTML、是否显示页脚，以及一枚可选标志。空名称/副标题/标志表示「使用宿主默认」（前端回落到 i18n 品牌与默认标志资源）；后端不为这三项编造默认值。页脚 HTML 的缺省值仍由宿主提供（blank 为 `企业应用 · © {year}` / `Enterprise App · © {year}`）。`{year}` 由前端页脚组件替换，后端不展开。`showFooter` 缺省为 `true`（存储里缺该键也按 `true` 读）。
 
 ## 线合同
 
@@ -14,7 +14,8 @@
   "subtitleEn": "",
   "footerHtmlZh": "",
   "footerHtmlEn": "",
-  "logoDataUrl": null
+  "logoDataUrl": null,
+  "showFooter": true
 }
 ```
 
@@ -24,8 +25,9 @@
 | `subtitleZh` / `subtitleEn` | ≤ 200 字，同上 |
 | `footerHtmlZh` / `footerHtmlEn` | ≤ 20 000 字，经共享 `sanitize_footer_html` 清洗 |
 | `logoDataUrl` | `data:image/(png\|jpeg\|webp);base64,...`；解码后 ≤ 128 KiB；魔数须与声明类型一致。`null` 或 `""` 清除标志（存 null）。其它 → 422 |
+| `showFooter` | 布尔；缺省 `true`。PUT 可省略（`null` 同省略），省略时保留库中已存值，不会把已存 `false` 重置为 `true`。存储 JSON 缺 `show_footer` 时按 `true` 读。 |
 
-Python 模型（`enterprise_platform/schemas.py`）：`GeneralSettings`（`PlatformModel`，camelCase 别名）与 `GeneralSettingsUpdate`（`StrictPlatformModel`）。字段为 snake_case：`title_zh`、`title_en`、`subtitle_zh`、`subtitle_en`、`footer_html_zh`、`footer_html_en`、`logo_data_url`。
+Python 模型（`enterprise_platform/schemas.py`）：`GeneralSettings`（`PlatformModel`，camelCase 别名）与 `GeneralSettingsUpdate`（`StrictPlatformModel`）。字段为 snake_case：`title_zh`、`title_en`、`subtitle_zh`、`subtitle_en`、`footer_html_zh`、`footer_html_en`、`logo_data_url`、`show_footer`。`GeneralSettings.show_footer` 默认 `True`；`GeneralSettingsUpdate.show_footer` 为 `bool | None = None`（与其它必填字段的整表替换不同：本字段按部分更新合并）。
 
 端口：`AppSettingsPort.get_general()` / `save_general(settings, *, actor_id)`。`PlatformPorts.app_settings` 为规范属性名（原 `PlatformPorts.footer` 已删除）。
 
@@ -34,11 +36,11 @@ Python 模型（`enterprise_platform/schemas.py`）：`GeneralSettings`（`Platf
 ### 兼容 shim
 
 - `GET /api/v1/app-settings/footer` 从 general 投影 `{footerHtmlZh, footerHtmlEn}`。
-- `PUT /api/v1/app-settings/footer` 只写回 general 的两个页脚字段，名称/副标题/标志保持不变。
+- `PUT /api/v1/app-settings/footer` 只写回 general 的两个页脚字段，名称/副标题/标志/`showFooter` 保持不变。
 
 ## 存储
 
-blank / EasyLearning / EasyCustoms：`platform_settings` 一行 `key="general"`，值为 snake_case JSON。读取时若 `general` 不存在但遗留 `footer` 行仍在，则把其两个 HTML 字段投影进 general（名称/副标题/标志为空）。写入只写 `general`，不删旧 `footer` 行。审计动作仍为 `settings.footer.update`。
+blank / EasyLearning / EasyCustoms：`platform_settings` 一行 `key="general"`，值为 snake_case JSON。读取时若 `general` 不存在但遗留 `footer` 行仍在，则把其两个 HTML 字段投影进 general（名称/副标题/标志为空，`show_footer` 为 `true`）。已有 `general` 行若缺 `show_footer` 键，同样按 `true` 读。写入只写 `general`，不删旧 `footer` 行。审计动作仍为 `settings.footer.update`。
 
 EasyTrade 不走 `platform_settings`，使用自有 `app_settings` 表（见该宿主文档）；接入本合同时应增列 `title_zh` / `title_en` / `subtitle_zh` / `subtitle_en` / `logo_data_url`，并继续关闭共享路由组（`PlatformRouteGroups(app_settings=False)` 或 `footer=False`）直到切到共享 GET/PUT。
 

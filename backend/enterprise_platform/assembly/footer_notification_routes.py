@@ -39,7 +39,15 @@ def _register_get_general(router: APIRouter, ctx: AssemblyDependencies) -> None:
         return ctx.port_call(ctx.ports.app_settings.get_general)
 
 
-def _general_from_update(body: GeneralSettingsUpdate) -> GeneralSettings:
+def _resolved_show_footer(body: GeneralSettingsUpdate, current: GeneralSettings | None) -> bool:
+    if body.show_footer is not None:
+        return body.show_footer
+    if current is not None:
+        return current.show_footer
+    return True
+
+
+def _general_from_update(body: GeneralSettingsUpdate, current: GeneralSettings | None = None) -> GeneralSettings:
     return GeneralSettings(
         title_zh=clean_plain_text(body.title_zh, max_length=_TITLE_MAX),
         title_en=clean_plain_text(body.title_en, max_length=_TITLE_MAX),
@@ -48,6 +56,7 @@ def _general_from_update(body: GeneralSettingsUpdate) -> GeneralSettings:
         footer_html_zh=sanitize_footer_html(body.footer_html_zh),
         footer_html_en=sanitize_footer_html(body.footer_html_en),
         logo_data_url=validate_logo_data_url(body.logo_data_url),
+        show_footer=_resolved_show_footer(body, current),
     )
 
 
@@ -59,7 +68,8 @@ def _register_put_general(router: APIRouter, ctx: AssemblyDependencies) -> None:
         _permission: Any = Depends(ctx.permission_for(SETTINGS_UPDATE)),
     ) -> GeneralSettings:
         try:
-            settings = _general_from_update(body)
+            current = ctx.port_call(ctx.ports.app_settings.get_general) if body.show_footer is None else None
+            settings = _general_from_update(body, current)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return ctx.port_call(lambda: ctx.ports.app_settings.save_general(settings, actor_id=user.id))
