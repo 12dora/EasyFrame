@@ -2,6 +2,7 @@
 
 import {
   resolveEnterpriseIdentityLabel,
+  type EnterpriseGeneralSettingsAdapter,
   type EnterpriseGeneralSettingsValue,
   type EnterpriseIdentityKind,
   type EnterpriseIdentityLabels,
@@ -199,3 +200,8 @@ export function dismissNotification(id: string) { return platformRequest<{ ok: b
 export function dismissAllNotifications() { return platformRequest<{ updated: number }>("/api/v1/notifications/read-all", { method: "POST" }); }
 export function loadGeneralSettings() { return platformRequest<ShellGeneralSettings>("/api/v1/app-settings/general"); }
 export function saveGeneralSettings(value: ShellGeneralSettings) { return platformRequest<ShellGeneralSettings>("/api/v1/app-settings/general", { method: "PUT", body: JSON.stringify(value) }); }
+/**
+ * 「设置 → 通用」与「设置 → 外观」的全局开关(显示页脚)共用这一个 adapter:同一份通用设置、同一个 PUT。
+ * 保存成功后由 surface 自己调 `primeEnterpriseGeneralSettings`,顶栏品牌与页脚立即跟随,宿主不用再广播。
+ */
+export const generalSettingsAdapter: EnterpriseGeneralSettingsAdapter = { load: loadGeneralSettings, save: saveGeneralSettings };

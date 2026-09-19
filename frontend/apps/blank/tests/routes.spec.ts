@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const locales = ["zh-CN", "en"];
 
-const defaultGeneral = { titleZh: "", titleEn: "", subtitleZh: "", subtitleEn: "", footerHtmlZh: "企业框架 · © {year}", footerHtmlEn: "Enterprise framework · © {year}", logoDataUrl: null };
+const defaultGeneral = { titleZh: "", titleEn: "", subtitleZh: "", subtitleEn: "", footerHtmlZh: "企业框架 · © {year}", footerHtmlEn: "Enterprise framework · © {year}", logoDataUrl: null, showFooter: true };
 
 async function mockPlatform(page: Page, general: Record<string, unknown> = defaultGeneral) {
   let stored = { ...general };
@@ -208,10 +208,11 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(page.locator('[data-test-id="general-settings-page"]')).toBeVisible();
     await expect(page.locator("main h1")).toHaveCount(1);
     await expect(page.locator("main h1")).toHaveText(locale === "en" ? "General" : "通用");
-    // 「外观」只改自己的账号偏好,没有门禁:任何登录用户都进得去。
+    // 「外观」只改自己的账号偏好,没有门禁:任何登录用户都进得去;全局「显示页脚」卡片只给能改通用设置的人。
     await page.goto(`/${locale}/app/settings/appearance`);
     await expect(page.locator('[data-test-id="appearance-settings-page"]')).toBeVisible();
     await expect(page.locator('[data-test-id="permission-denied"]')).toHaveCount(0);
+    await expect(page.locator('[data-test-id="appearance-global-section"]')).toHaveCount(0);
     await page.goto(`/${locale}/app/notifications`);
     await expect(page.locator('[data-test-id="permission-denied"]')).toBeVisible();
   });
@@ -346,6 +347,26 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await saved;
     await expect(page.locator('[data-test-id="app-brand-title"]')).toHaveText(locale === "en" ? "Jiefa Enterprise" : "捷发企业");
     await expect(page.locator('[data-test-id="app-brand-subtitle"]')).toHaveText(locale === "en" ? "Unified workbench" : "统一工作台");
+  });
+  test("the global show-footer switch hides the footer and the workspace takes its height", async ({ page }) => {
+    const saved: Record<string, unknown>[] = [];
+    page.on("request", (request) => { if (new URL(request.url()).pathname === "/api/v1/app-settings/general" && request.method() === "PUT") saved.push(request.postDataJSON() as Record<string, unknown>); });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/${locale}/app/settings/appearance`);
+    await expect(page.locator('[data-test-id="app-footer-html"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="appearance-global-section"]')).toBeVisible();
+    await page.locator('[data-test-id="appearance-show-footer-switch"]').click();
+    // 整份通用设置原样 PUT 回去,只改这一个字段;外壳当场收起页脚,不用刷新。
+    await expect.poll(() => saved.length).toBe(1);
+    expect(saved[0]).toMatchObject({ footerHtmlZh: "企业框架 · © {year}", showFooter: false });
+    await expect(page.locator('[data-test-id="app-footer-html"]')).toHaveCount(0);
+    // 页脚那截高度归工作区:`<main>` 的下沿贴到视口底。
+    const box = await page.locator("main").boundingBox();
+    expect(Math.abs((box?.y ?? 0) + (box?.height ?? 0) - 900)).toBeLessThanOrEqual(1);
+    // 刷新后仍然不显示(读的是保存后的值)。
+    await page.reload();
+    await expect(page.locator('[data-test-id="appearance-settings-page"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="app-footer-html"]')).toHaveCount(0);
   });
   test("the identity line reports the local superadmin and an account with no grants", async ({ page }) => {
     await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ id: "root", name: "Root", hasLocalPassword: true, isLocalSuperadmin: true, permissions: ["accounts.local.view"] }) }));

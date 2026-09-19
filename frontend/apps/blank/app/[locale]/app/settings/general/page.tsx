@@ -1,18 +1,10 @@
 "use client";
 
-import {
-  EnterpriseGeneralSettingsSurface,
-  EnterprisePermissionDeniedPage,
-  type EnterpriseGeneralSettingsAdapter,
-} from "@easy-enterprise/ui/enterprise";
+import { EnterpriseGeneralSettingsSurface, EnterprisePermissionDeniedPage } from "@easy-enterprise/ui/enterprise";
 import { useParams } from "next/navigation";
 import { useBlankShellIdentity } from "../../../../../components/blank-shell";
 import { localeOf, messages } from "../../../../../lib/messages";
-import { loadGeneralSettings, saveGeneralSettings } from "../../../../../lib/shell-adapter";
-
-// 保存成功后由 surface 调用 primeEnterpriseGeneralSettings，顶栏与页脚立即跟随，
-// 宿主不需要再自行广播更新事件。
-const adapter: EnterpriseGeneralSettingsAdapter = { load: loadGeneralSettings, save: saveGeneralSettings };
+import { generalSettingsAdapter } from "../../../../../lib/shell-adapter";
 
 export default function GeneralSettingsPage() {
   const params = useParams<{ locale: string }>();
@@ -30,5 +22,5 @@ export default function GeneralSettingsPage() {
       />
     );
   }
-  return <EnterpriseGeneralSettingsSurface adapter={adapter} labels={t.generalSettings} />;
+  return <EnterpriseGeneralSettingsSurface adapter={generalSettingsAdapter} labels={t.generalSettings} />;
 }

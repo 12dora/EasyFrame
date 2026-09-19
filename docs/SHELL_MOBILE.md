@@ -1,6 +1,6 @@
 # 外壳的手机形态（mobile shell）
 
-手机上原来是两条头部栏：`Topbar` 57 px + `MobileNav` 分区栏 57 px，正文要到 114 px 之后才开始；
+手机上原来是两条头部栏：`Topbar` 57 px + `MobileNav` 分区栏 57 px（EasyUI 当时的顶栏高度），正文要到 114 px 之后才开始；
 框架底部还钉着一条 ~50 px 的页脚，列表又是横向滚动的表格 —— 390×844 的屏幕一屏只剩四行。
 本文是 blank 模板里手机形态的契约与宿主镜像清单，配套的是
 [SHELL_NAV_INTENT.md](./SHELL_NAV_INTENT.md)（点侧栏多久有反应）与
@@ -67,7 +67,10 @@ const footerFallback = <>{t.public.footer} · © {new Date().getFullYear()}</>;
 // 页面底部那一份：带 <footer> 地标（app-footer-html / app-footer-fallback）
 const footer = <EnterpriseConfiguredFooter html={footerHtml} fallback={footerFallback} />;
 // 抽屉里那一份：bare（app-footer-html-inline / app-footer-fallback-inline）
-const drawerFooter = <EnterpriseConfiguredFooter bare html={footerHtml} fallback={footerFallback} />;
+// 全局「显示页脚」关掉时不给：MobileNav 拿不到 footer 就连那条 border-t 区域都不画
+const showFooter = resolveEnterpriseShowFooter(settings);
+const drawerFooter = showFooter ? <EnterpriseConfiguredFooter bare html={footerHtml} fallback={footerFallback} /> : undefined;
+// 框架那一份照传，另给 EnterpriseAppFrame showFooter={showFooter}（见 GENERAL_SETTINGS.md）
 ```
 
 **抽屉里那份一定要 `bare`。** 抽屉本身是 `role="dialog"`，再嵌一个 `<footer>` 会在对话框里多出
@@ -150,9 +153,10 @@ EasyUI 只管外壳与表格。分栏详情页、并排的编辑面板、宽表�
 ## 已知不变量（回归时照着看）
 
 - **桌面（md+）逐像素不变**：`Topbar`、`AppShell` 留白、`PageHeader`、列表仍是表格。
-- 手机上 `<main>` 之前只有一条 57 px 的头部栏；`admin-mobile-nav` / `admin-mobile-nav-current`
+- 手机上 `<main>` 之前只有一条头部栏（EasyUI `Topbar`，48 px 高 + 1 px 底边）；`admin-mobile-nav` / `admin-mobile-nav-current`
   在任何页面都不再出现。
-- 手机上页面底部没有页脚，抽屉底部有；桌面反过来。两处文案是同一份（同一个 `footerHtml`）。
+- 手机上页面底部没有页脚，抽屉底部有；桌面反过来。两处文案是同一份（同一个 `footerHtml`），也跟同一个 `showFooter` 开关：关掉时两处都不画。
+- `<main>` 的上内边距由 EasyUI 定义（手机 12 px / md 起 16 px，CSS 变量 `--app-shell-main-pt`，`@easy-enterprise/ui/shell` 导出 `APP_SHELL_MAIN_PADDING_TOP_PX` / `APP_SHELL_MAIN_PADDING_TOP_VAR`）。宿主里要跟它对齐的东西（吸顶页眉上方的挡板等）一律读这个变量（如 `before:h-[var(--app-shell-main-pt)]`），不要抄一对断点值或写死顶栏高度。
 - 抽屉仍在**路由真的变化**时才关（`pathKey` 是真实 `pathname`）；Esc、点遮罩、断点回桌面都能关。
 - 手机上列表是卡片、没有横向滚动条；转回桌面，刚才在卡片工具条里选的关键字 / 筛选 / 排序 / 页码
   一个不丢（它们本来就住在同一份查询状态里）。

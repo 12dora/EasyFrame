@@ -37,7 +37,9 @@
    `EnterpriseAppearanceSettingsSurface`（自带 `PageHeader`，本页唯一的 H1）。它只读写上面那份
    上下文，自己既不取数也不落盘，所以「设置页改一下」与「所有列表页的行高」天然是同一个事实源。
    **没有权限门禁**：只改当前账号自己的偏好，任何登录用户都进得去，导航项因此无条件出现
-   （`components/blank-shell.tsx` 的 `settingsItems`，排在「通用」之后）。
+   （`components/blank-shell.tsx` 的 `settingsItems`，排在「通用」之后）。同一页还有一张全局的
+   「显示页脚」卡片，只给有 `settings.app_setting.update` 的人（`canManageGlobal`），见
+   [GENERAL_SETTINGS.md](GENERAL_SETTINGS.md)。
 4. **表格什么都不用做**：`DataTable` / `ClientTable` 各自读 `useTableDensity()`
    （紧凑 → antd `size="small"`，宽松 → `"middle"`）。页面不传 `density`、不落盘，
    `components/examples/table-example.tsx` 就是原样的例子。
