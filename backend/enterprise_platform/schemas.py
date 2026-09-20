@@ -187,14 +187,19 @@ class CurrentUser(PlatformModel):
 
 
 TableDensity = Literal["compact", "comfortable"]
+RowSpacing = Literal["compact", "comfortable"]
 
 
 class UiPreferences(PlatformModel):
+    """账号级观感偏好:表格行高与表单行距各管各的,互不牵连。"""
+
     table_density: TableDensity = "compact"
+    row_spacing: RowSpacing = "compact"
 
 
 class UiPreferencesUpdate(StrictPlatformModel):
     table_density: TableDensity | None = None
+    row_spacing: RowSpacing | None = None
 
 
 class AuthSession(PlatformModel):

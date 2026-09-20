@@ -16,8 +16,11 @@ from enterprise_platform.assembly import (
 from enterprise_platform.auth import AuthError
 from enterprise_platform.schemas import CurrentUser, EasyAuthStatus
 
-_COMPACT = {"tableDensity": "compact"}
-_COMFORTABLE = {"tableDensity": "comfortable"}
+# 会话里两档观感偏好一起下发;补丁体一次只带要改的那一档。
+_COMPACT = {"tableDensity": "compact", "rowSpacing": "compact"}
+_COMFORTABLE = {"tableDensity": "comfortable", "rowSpacing": "comfortable"}
+_DENSE_TABLE = {"tableDensity": "comfortable"}
+_LOOSE_ROWS = {"rowSpacing": "comfortable"}
 
 
 class _Account:
@@ -53,8 +56,8 @@ class _Integrations:
         return EasyAuthStatus(permission_request_url=self.url)
 
 
-def _session_json(url: str | None, density: str = "compact") -> dict[str, Any]:
-    return {"permissionRequestUrl": url, "preferences": {"tableDensity": density}}
+def _session_json(url: str | None, density: str = "compact", row_spacing: str = "compact") -> dict[str, Any]:
+    return {"permissionRequestUrl": url, "preferences": {"tableDensity": density, "rowSpacing": row_spacing}}
 
 
 def _client(
@@ -139,8 +142,32 @@ def test_preferences_patch_persists_and_reflects_on_session() -> None:
     patched = client.patch("/api/v1/auth/preferences", json=_COMFORTABLE)
     assert patched.status_code == 200, patched.text
     assert patched.json()["preferences"] == _COMFORTABLE
-    assert account.prefs == {"table_density": "comfortable"}
+    assert account.prefs == {"table_density": "comfortable", "row_spacing": "comfortable"}
     assert client.get("/api/v1/auth/session").json()["preferences"] == _COMFORTABLE
+
+
+def test_preferences_patch_leaves_the_other_step_untouched() -> None:
+    account = _PrefAccount()
+    client = _client(account=account)
+    assert client.patch("/api/v1/auth/preferences", json=_LOOSE_ROWS).json()["preferences"] == {
+        "tableDensity": "compact",
+        "rowSpacing": "comfortable",
+    }
+    assert client.patch("/api/v1/auth/preferences", json=_DENSE_TABLE).json()["preferences"] == _COMFORTABLE
+    assert account.prefs == {"row_spacing": "comfortable", "table_density": "comfortable"}
+
+
+def test_session_reads_a_stored_step_written_in_camel_case() -> None:
+    client = _client(account=_PrefAccount({"rowSpacing": "comfortable"}))
+    assert client.get("/api/v1/auth/session").json()["preferences"] == {
+        "tableDensity": "compact",
+        "rowSpacing": "comfortable",
+    }
+
+
+def test_preferences_patch_rejects_invalid_row_spacing() -> None:
+    response = _client(account=_PrefAccount()).patch("/api/v1/auth/preferences", json={"rowSpacing": "roomy"})
+    assert response.status_code == 422
 
 
 def test_preferences_patch_rejects_invalid_value() -> None:
@@ -171,6 +198,4 @@ def test_preferences_patch_writes_audit_like_other_account_mutations() -> None:
     client = _client(account=_PrefAccount(), hooks=PlatformSecurityHooks(after_event=after_event))
     response = client.patch("/api/v1/auth/preferences", json=_COMFORTABLE)
     assert response.status_code == 200
-    assert events == [
-        ("user-1", "auth.preferences.update", {"tableDensity": "compact"}, {"tableDensity": "comfortable"})
-    ]
+    assert events == [("user-1", "auth.preferences.update", _COMPACT, _COMFORTABLE)]

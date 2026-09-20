@@ -13,12 +13,12 @@ from enterprise_platform.schemas import (
     AuthSession,
     ChangePasswordRequest,
     CurrentUser,
-    TableDensity,
     UiPreferences,
     UiPreferencesUpdate,
 )
 
-_TABLE_DENSITY_VALUES = frozenset({"compact", "comfortable"})
+_DENSITY_VALUES = frozenset({"compact", "comfortable"})
+_DENSITY_DEFAULT = "compact"
 
 
 def register_account_routes(router: APIRouter, ctx: AssemblyDependencies) -> None:
@@ -70,9 +70,17 @@ def _load_ui_preferences(ctx: AssemblyDependencies, account_id: str) -> dict[str
 
 
 def _preferences_from_raw(raw: dict[str, Any]) -> UiPreferences:
-    value = raw.get("table_density", raw.get("tableDensity"))
-    density: TableDensity = value if value in _TABLE_DENSITY_VALUES else "compact"
-    return UiPreferences(table_density=density)
+    return UiPreferences(
+        table_density=_stored_step(raw, "table_density", "tableDensity"),
+        row_spacing=_stored_step(raw, "row_spacing", "rowSpacing"),
+    )
+
+
+def _stored_step(raw: dict[str, Any], key: str, alias: str) -> Any:
+    """读一档观感偏好:认蛇形也认驼峰,取值不在集合内一律回落到默认档。"""
+
+    value = raw.get(key, raw.get(alias))
+    return value if value in _DENSITY_VALUES else _DENSITY_DEFAULT
 
 
 def _save_preferences(ctx: AssemblyDependencies, user: CurrentUser, body: UiPreferencesUpdate) -> None:
@@ -85,8 +93,8 @@ def _save_preferences(ctx: AssemblyDependencies, user: CurrentUser, body: UiPref
     ctx.hooks.after_event(
         user.id,
         "auth.preferences.update",
-        {"tableDensity": before.table_density},
-        {"tableDensity": after.table_density},
+        {"tableDensity": before.table_density, "rowSpacing": before.row_spacing},
+        {"tableDensity": after.table_density, "rowSpacing": after.row_spacing},
     )
 
 

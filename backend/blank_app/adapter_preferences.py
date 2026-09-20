@@ -8,8 +8,8 @@ from blank_app.database import SessionLocal
 from blank_app.models import Account
 from enterprise_platform.auth import AuthError
 
-_TABLE_DENSITY_KEY = "table_density"
-_TABLE_DENSITY_VALUES = frozenset({"compact", "comfortable"})
+_PREFERENCE_KEYS = ("table_density", "row_spacing")
+_PREFERENCE_VALUES = frozenset({"compact", "comfortable"})
 
 
 class UiPreferencesMixin:
@@ -27,9 +27,11 @@ class UiPreferencesMixin:
             if account is None:
                 raise AuthError(401, "登录态无效")
             prefs = dict(account.ui_preferences) if isinstance(account.ui_preferences, dict) else {}
-            density = patch.get(_TABLE_DENSITY_KEY)
-            if density in _TABLE_DENSITY_VALUES:
-                prefs[_TABLE_DENSITY_KEY] = density
+            # 只写补丁里带来的那几档:两档偏好各存各的,改一档不会把另一档抹掉。
+            for key in _PREFERENCE_KEYS:
+                value = patch.get(key)
+                if value in _PREFERENCE_VALUES:
+                    prefs[key] = value
             account.ui_preferences = prefs
             db.commit()
             return prefs

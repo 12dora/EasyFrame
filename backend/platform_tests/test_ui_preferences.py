@@ -74,16 +74,21 @@ def test_blank_session_preferences_persist_on_account() -> None:
         try:
             session = client.get("/api/v1/auth/session", headers=headers)
             assert session.status_code == 200
-            assert session.json()["preferences"] == {"tableDensity": "compact"}
+            assert session.json()["preferences"] == {"tableDensity": "compact", "rowSpacing": "compact"}
             patched = client.patch("/api/v1/auth/preferences", headers=headers, json={"tableDensity": "comfortable"})
             assert patched.status_code == 200, patched.text
-            assert patched.json()["preferences"] == {"tableDensity": "comfortable"}
+            assert patched.json()["preferences"] == {"tableDensity": "comfortable", "rowSpacing": "compact"}
+            # 两档各存各的:再补一档行距,表格那档不受影响。
+            loosened = client.patch("/api/v1/auth/preferences", headers=headers, json={"rowSpacing": "comfortable"})
+            assert loosened.json()["preferences"] == {"tableDensity": "comfortable", "rowSpacing": "comfortable"}
             assert client.get("/api/v1/auth/session", headers=headers).json()["preferences"] == {
-                "tableDensity": "comfortable"
+                "tableDensity": "comfortable",
+                "rowSpacing": "comfortable",
             }
             with SessionLocal() as db:
                 account = db.query(Account).filter(Account.username == os.environ["BLANK_ADMIN_USERNAME"]).one()
                 assert account.ui_preferences.get("table_density") == "comfortable"
+                assert account.ui_preferences.get("row_spacing") == "comfortable"
         finally:
             with SessionLocal() as db:
                 account = db.query(Account).filter(Account.username == os.environ["BLANK_ADMIN_USERNAME"]).one()
