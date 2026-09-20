@@ -7,6 +7,7 @@ import {
   type EnterpriseIdentityKind,
   type EnterpriseIdentityLabels,
 } from "@easy-enterprise/ui/enterprise";
+import { DEFAULT_ROW_SPACING, type RowSpacing } from "@easy-enterprise/ui";
 import { DEFAULT_TABLE_DENSITY, type TableDensity } from "@easy-enterprise/ui/table";
 import { platformRequest } from "./platform-api";
 
@@ -51,6 +52,12 @@ export interface ShellIdentity {
    * compact by default. It travels with the account, not with the browser.
    */
   tableDensity: TableDensity;
+  /**
+   * Account preference: row spacing (`/auth/session` -> `preferences.rowSpacing`), compact by
+   * default. Independent of `tableDensity` and carried the same way — on the account, never in
+   * the browser.
+   */
+  rowSpacing: RowSpacing;
 }
 export interface ShellReminder { id: string; title: string; detail: string; urgent: boolean; }
 /** The wire shape of `/api/v1/app-settings/general`; identical to the package value type. */
@@ -59,20 +66,21 @@ export type ShellGeneralSettings = EnterpriseGeneralSettingsValue;
 /**
  * `GET /api/v1/auth/session`: login-gated only, no permission code.
  *
- * `preferences` carries the look-and-feel settings stored on the account (currently the table
- * density): kept server-side rather than in the browser, so another machine or another browser
- * still shows the row height this person picked. A missing field hydrates to the contract default
- * (compact) — that is contract hydration, not a compatibility shim.
+ * `preferences` carries the look-and-feel settings stored on the account (the table density and
+ * the row spacing, two independent steps): kept server-side rather than in the browser, so another
+ * machine or another browser still shows what this person picked. A missing field hydrates to the
+ * contract default (compact) — that is contract hydration, not a compatibility shim.
  */
 interface AuthSession {
   permissionRequestUrl?: string | null;
-  preferences?: { tableDensity?: string | null } | null;
+  preferences?: { tableDensity?: string | null; rowSpacing?: string | null } | null;
 }
 
-/** The two things `/auth/session` lands alongside the identity. */
+/** What `/auth/session` lands alongside the identity: the request URL plus the account preferences. */
 export interface ShellSession {
   permissionRequestUrl: string | null;
   tableDensity: TableDensity;
+  rowSpacing: RowSpacing;
 }
 
 /** `/auth/session` wait cap: on timeout treat the request URL as missing. */
@@ -88,10 +96,16 @@ export function tableDensityOf(value: unknown): TableDensity {
   return value === "comfortable" || value === "compact" ? value : DEFAULT_TABLE_DENSITY;
 }
 
+/** Same contract hydration for the sibling preference: anything unknown (missing included) is compact. */
+export function rowSpacingOf(value: unknown): RowSpacing {
+  return value === "comfortable" || value === "compact" ? value : DEFAULT_ROW_SPACING;
+}
+
 function toShellSession(session: AuthSession | null): ShellSession {
   return {
     permissionRequestUrl: trimmed(session?.permissionRequestUrl),
     tableDensity: tableDensityOf(session?.preferences?.tableDensity),
+    rowSpacing: rowSpacingOf(session?.preferences?.rowSpacing),
   };
 }
 
@@ -128,11 +142,25 @@ export function saveTableDensity(tableDensity: TableDensity): Promise<ShellSessi
 }
 
 /**
+ * Write the row spacing back (`PATCH /api/v1/auth/preferences`) — the sibling of
+ * `saveTableDensity`, same route, same response.
+ *
+ * Only `rowSpacing` travels: patching one key leaves the other preference alone (the backend owns
+ * that), so the two steps can never overwrite each other.
+ */
+export function saveRowSpacing(rowSpacing: RowSpacing): Promise<ShellSession> {
+  return platformRequest<AuthSession>("/api/v1/auth/preferences", {
+    method: "PATCH",
+    body: JSON.stringify({ rowSpacing }),
+  }).then(toShellSession);
+}
+
+/**
  * Two-phase result of `startShellIdentityLoad`: the identity lands first, the
  * permission-request URL follows.
  */
 export interface ShellIdentityLoad {
-  /** The `/auth/me` identity. The request URL and the density are defaults here — `session` fills them in. */
+  /** The `/auth/me` identity. The request URL and both preferences are defaults here — `session` fills them in. */
   readonly identity: ShellIdentity;
   /** The parallel `/auth/session`; resolves to the defaults on failure or timeout and never rejects. */
   readonly session: Promise<ShellSession>;
@@ -166,6 +194,7 @@ function toShellIdentity(user: CurrentUser, fallbackName: string, identityLabels
     isLocalSuperadmin,
     permissionRequestUrl: null,
     tableDensity: DEFAULT_TABLE_DENSITY,
+    rowSpacing: DEFAULT_ROW_SPACING,
   };
 }
 
@@ -193,7 +222,7 @@ export async function startShellIdentityLoad(fallbackName: string, identityLabel
 export async function loadShellIdentity(fallbackName: string, identityLabels: EnterpriseIdentityLabels): Promise<ShellIdentity> {
   const { identity, session } = await startShellIdentityLoad(fallbackName, identityLabels);
   const settled = await session;
-  return { ...identity, permissionRequestUrl: settled.permissionRequestUrl, tableDensity: settled.tableDensity };
+  return { ...identity, permissionRequestUrl: settled.permissionRequestUrl, tableDensity: settled.tableDensity, rowSpacing: settled.rowSpacing };
 }
 export async function loadNotifications(): Promise<ShellReminder[]> { const result = await platformRequest<NotificationPage>("/api/v1/notifications?limit=100"); return result.items.filter((item) => !item.readAt).map((item) => ({ id: item.id, title: item.title, detail: item.body, urgent: item.level === "error" || item.level === "warning" })); }
 export function dismissNotification(id: string) { return platformRequest<{ ok: boolean }>(`/api/v1/notifications/${encodeURIComponent(id)}/read`, { method: "POST" }); }

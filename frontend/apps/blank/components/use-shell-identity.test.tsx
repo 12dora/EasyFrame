@@ -52,6 +52,7 @@ function identity(overrides: Partial<ShellIdentity> = {}): ShellIdentity {
     isLocalSuperadmin: false,
     permissionRequestUrl: null,
     tableDensity: "compact",
+    rowSpacing: "compact",
     ...overrides,
   };
 }
@@ -61,7 +62,7 @@ function stubLoad(value: ShellIdentity): { settleSession: (url: string | null, t
   let settle: (session: ShellSession) => void = () => undefined;
   const session = new Promise<ShellSession>((resolve) => { settle = resolve; });
   startShellIdentityLoad.mockResolvedValue({ identity: value, session } satisfies ShellIdentityLoad);
-  return { settleSession: (url, tableDensity = "compact") => settle({ permissionRequestUrl: url, tableDensity }) };
+  return { settleSession: (url, tableDensity = "compact") => settle({ permissionRequestUrl: url, tableDensity, rowSpacing: "compact" }) };
 }
 
 let refresh: () => Promise<void> = () => Promise.resolve();

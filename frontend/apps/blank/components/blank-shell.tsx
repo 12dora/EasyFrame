@@ -13,6 +13,7 @@ import { enterpriseLogoutAdapter } from "../lib/auth-adapter";
 import { localeOf, messages, type Locale } from "../lib/messages";
 import { BLANK_BUSINESS_PERMISSION_CODES } from "../lib/permissions";
 import { loadGeneralSettings, type ShellIdentity } from "../lib/shell-adapter";
+import { BlankRowSpacingProvider } from "./row-spacing";
 import { BlankTableDensityProvider } from "./table-density";
 import { onboardingReady, useShellIdentity } from "./use-shell-identity";
 import { useShellNotifications } from "./use-shell-notifications";
@@ -25,13 +26,16 @@ export function useBlankShellIdentity() { const identity = useContext(BlankShell
 /**
  * 身份 context + 跟着身份走的偏好 provider。
  *
- * 表格行高是账号偏好(`identity.tableDensity`),所以它的 provider 就该挂在「身份可用」
- * 的那一层:外壳每包一次身份,行高也就只接一次,设置页与所有列表页读的是同一份档位。
+ * 表格行高(`identity.tableDensity`)与行距(`identity.rowSpacing`)都是账号偏好,所以两个
+ * provider 就该挂在「身份可用」的那一层:外壳每包一次身份,它们也就只接一次,设置页、
+ * 所有列表页与所有表单读的是同一份档位。两份偏好互不相干,各自套一层。
  */
 function BlankShellIdentityProvider({ value, children }: { value: ShellIdentity; children: ReactNode }) {
   return (
     <BlankShellIdentityContext.Provider value={value}>
-      <BlankTableDensityProvider identity={value}>{children}</BlankTableDensityProvider>
+      <BlankTableDensityProvider identity={value}>
+        <BlankRowSpacingProvider identity={value}>{children}</BlankRowSpacingProvider>
+      </BlankTableDensityProvider>
     </BlankShellIdentityContext.Provider>
   );
 }

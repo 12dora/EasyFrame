@@ -47,6 +47,7 @@ function identity(overrides: Partial<ShellIdentity> = {}): ShellIdentity {
     isLocalSuperadmin: false,
     permissionRequestUrl: "https://easyauth.test/request",
     tableDensity: "compact",
+    rowSpacing: "compact",
     ...overrides,
   };
 }
@@ -75,6 +76,25 @@ describe("identity snapshot", () => {
     writeCachedIdentity("zh-CN", identity({ tableDensity: "comfortable" }));
     clearMemoryOnly();
     expect(readCachedIdentity("zh-CN")?.tableDensity).toBe("comfortable");
+  });
+
+  // 行距是另一份独立的账号偏好,快照里同样带着它。
+  it("round-trips the account row spacing", () => {
+    writeCachedIdentity("zh-CN", identity({ rowSpacing: "comfortable" }));
+    clearMemoryOnly();
+    expect(readCachedIdentity("zh-CN")?.rowSpacing).toBe("comfortable");
+    // 两份偏好互不相干:只改行距,行高不动。
+    expect(readCachedIdentity("zh-CN")?.tableDensity).toBe("compact");
+  });
+
+  // 加上行距之前写下的快照没有这个字段:整份仍可读,行距回落到全局默认。
+  it("hydrates a snapshot without a row spacing to the default", () => {
+    writeCachedIdentity("zh-CN", identity({ rowSpacing: "comfortable" }));
+    const raw = JSON.parse(window.sessionStorage.getItem(CACHE_KEY)!) as { identity: Record<string, unknown> };
+    delete raw.identity.rowSpacing;
+    window.sessionStorage.setItem(CACHE_KEY, JSON.stringify(raw));
+    clearMemoryOnly();
+    expect(readCachedIdentity("zh-CN")?.rowSpacing).toBe("compact");
   });
 
   // 结构版本(v2)之前写下的快照没有这个字段:整份仍可读,档位回落到全局默认。
@@ -295,6 +315,14 @@ describe("reconcileIdentity", () => {
     expect(reconcileIdentity(cached, identity({ permissionRequestUrl: null, tableDensity: "compact" })).tableDensity).toBe("comfortable");
     expect(reconcileIdentity(cached, identity({ tableDensity: "compact" }), true).tableDensity).toBe("compact");
   });
+
+  // 行距走同一条规矩,而且与行高各算各的。
+  it("keeps the snapshot row spacing until the session answers", () => {
+    const cached = identity({ rowSpacing: "comfortable" });
+    expect(reconcileIdentity(cached, identity({ rowSpacing: "compact" })).rowSpacing).toBe("comfortable");
+    expect(reconcileIdentity(cached, identity({ permissionRequestUrl: null, rowSpacing: "compact" })).rowSpacing).toBe("comfortable");
+    expect(reconcileIdentity(cached, identity({ rowSpacing: "compact" }), true).rowSpacing).toBe("compact");
+  });
 });
 
 describe("sameIdentity", () => {
@@ -315,6 +343,11 @@ describe("sameIdentity", () => {
   // 换了档位就是屏幕上不一样:外壳必须重画,否则设置页改完列表还停在旧行高。
   it("rejects a changed table density", () => {
     expect(sameIdentity(identity(), identity({ tableDensity: "comfortable" }))).toBe(false);
+  });
+
+  // 行距同理:全站表单的松紧变了就是屏幕上不一样。
+  it("rejects a changed row spacing", () => {
+    expect(sameIdentity(identity(), identity({ rowSpacing: "comfortable" }))).toBe(false);
   });
 });
 

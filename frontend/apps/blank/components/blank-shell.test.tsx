@@ -77,6 +77,7 @@ function identity(overrides: Partial<ShellIdentity> = {}): ShellIdentity {
     isLocalSuperadmin: false,
     permissionRequestUrl: null,
     tableDensity: "compact",
+    rowSpacing: "compact",
     ...overrides,
   };
 }

@@ -90,9 +90,9 @@ function useIdentityLoader(params: IdentityLoaderParams): void {
             if (!alive) return;
             onSessionSettled();
             // Authoritative, null included: a URL that was un-configured must not keep coming
-            // back out of the snapshot on every same-tab reload. Same for the row density —
+            // back out of the snapshot on every same-tab reload. Same for both preferences —
             // a step changed elsewhere is settled by this answer.
-            applyIdentity({ ...identity, permissionRequestUrl: settled.permissionRequestUrl, tableDensity: settled.tableDensity }, true);
+            applyIdentity({ ...identity, permissionRequestUrl: settled.permissionRequestUrl, tableDensity: settled.tableDensity, rowSpacing: settled.rowSpacing }, true);
           });
         })
         .catch((cause: unknown) => { if (alive) onFailure(cause); });

@@ -6,8 +6,9 @@ const defaultGeneral = { titleZh: "", titleEn: "", subtitleZh: "", subtitleEn: "
 
 async function mockPlatform(page: Page, general: Record<string, unknown> = defaultGeneral) {
   let stored = { ...general };
-  // 账号偏好(表格行高)住在服务端:`PATCH /auth/preferences` 改的就是这一份,`/auth/session` 再读回去。
-  let preferences: Record<string, unknown> = { tableDensity: "compact" };
+  // 账号偏好(表格行高、行距)住在服务端:`PATCH /auth/preferences` 改的就是这一份,`/auth/session` 再读回去;
+  // 两个键各改各的(下面的合并写回就是后端那条「只动送来的那一项」的规矩)。
+  let preferences: Record<string, unknown> = { tableDensity: "compact", rowSpacing: "compact" };
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const json = (body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
