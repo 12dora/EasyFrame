@@ -67,6 +67,7 @@ def scan_spec_from_config(payload: dict[str, Any]) -> ScanSpec:
         route_exclude_substrings=tuple(payload.get("route_exclude_substrings") or ScanSpec.route_exclude_substrings),
         migration_substrings=tuple(payload.get("migration_substrings") or ScanSpec.migration_substrings),
         fixture_globs=tuple(payload.get("fixture_globs") or ScanSpec.fixture_globs),
+        exclude_substrings=tuple(payload.get("exclude_substrings") or ScanSpec.exclude_substrings),
     )
 
 

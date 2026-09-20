@@ -135,3 +135,29 @@ def test_platform_tests_use_test_file_threshold(tmp_path: Path) -> None:
     violations = scan_python_file_size_violations(tmp_path, ScanSpec(roots=("backend/platform_tests",)))
 
     assert [(item.path, item.threshold) for item in violations] == [("backend/platform_tests/test_big.py", 400)]
+
+
+def test_excluded_paths_leave_the_scan_entirely(tmp_path: Path) -> None:
+    """生成物(压成一条的基线迁移)整段退出扫描:文件与函数两条线都不再报点。"""
+
+    _write(tmp_path / "backend/alembic/versions/0001_baseline.py", _function_source("upgrade", 600))
+    _write(tmp_path / "backend/app/seed_demo.py", _python_lines(501))
+    spec = ScanSpec(roots=DEFAULT_ROOTS, exclude_substrings=("/alembic/versions/",))
+
+    files = scan_python_file_size_violations(tmp_path, spec)
+    functions = scan_python_function_size_violations(tmp_path, spec)
+
+    assert [item.path for item in files] == ["backend/app/seed_demo.py"]
+    assert functions == []
+
+
+def test_without_an_exclude_list_migrations_are_still_scanned(tmp_path: Path) -> None:
+    """默认口径不变:不写 exclude_substrings 的仓库照旧按迁移阈值管住手写迁移。"""
+
+    _write(tmp_path / "backend/alembic/versions/0001_baseline.py", _function_source("upgrade", 600))
+
+    functions = scan_python_function_size_violations(tmp_path, _spec(*DEFAULT_ROOTS))
+
+    assert [(item.path, item.threshold) for item in functions] == [
+        ("backend/alembic/versions/0001_baseline.py", CodeSizeThresholds().migration)
+    ]

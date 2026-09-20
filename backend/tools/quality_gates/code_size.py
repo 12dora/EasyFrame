@@ -48,6 +48,11 @@ class ScanSpec:
     route_exclude_substrings: tuple[str, ...] = ("/schemas/", "/dependencies/")
     migration_substrings: tuple[str, ...] = ("/alembic/versions/",)
     fixture_globs: tuple[str, ...] = ("*.json",)
+    #: 整段不参与扫描的路径片段(相对 repo 根的 posix 路径里出现即跳过)。
+    #: 留给**生成物**:压成一条的基线迁移、代码生成器的产物 —— 它们的行数由生成器
+    #: 决定,拆函数既不会发生也不该发生,让规模阈值压在上面只会把门禁长期钉在红色。
+    #: 默认空:不写就沿用原来的口径,是否豁免由各仓库的 gates.json 明写。
+    exclude_substrings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -224,8 +229,11 @@ def _python_paths(repo_root: Path, spec: ScanSpec) -> list[Path]:
     found: set[Path] = set()
     for root in _existing_roots(repo_root, spec.roots):
         for path in root.rglob("*.py"):
-            if path.is_file() and not _is_skipped(path, repo_root):
-                found.add(path.resolve())
+            if not path.is_file() or _is_skipped(path, repo_root):
+                continue
+            if _is_excluded(_relative_path(repo_root, path), spec):
+                continue
+            found.add(path.resolve())
     return sorted(found)
 
 
@@ -235,6 +243,8 @@ def _text_paths(repo_root: Path, spec: ScanSpec) -> list[Path]:
         for pattern in spec.fixture_globs:
             for path in root.rglob(pattern):
                 if not (path.is_file() and path.suffix == ".json") or _is_skipped(path, repo_root):
+                    continue
+                if _is_excluded(_relative_path(repo_root, path), spec):
                     continue
                 if _is_test_path(_relative_path(repo_root, path), spec):
                     found.add(path.resolve())
@@ -298,6 +308,13 @@ def _is_route_path(rel_path: str, spec: ScanSpec) -> bool:
 def _is_migration_path(rel_path: str, spec: ScanSpec) -> bool:
     padded = f"/{_posix_rel(rel_path)}"
     return any(token in padded for token in spec.migration_substrings)
+
+
+def _is_excluded(rel_path: str, spec: ScanSpec) -> bool:
+    if not spec.exclude_substrings:
+        return False
+    padded = f"/{_posix_rel(rel_path)}"
+    return any(token in padded for token in spec.exclude_substrings)
 
 
 def _count_non_comment_sloc(lines: list[str]) -> int:
