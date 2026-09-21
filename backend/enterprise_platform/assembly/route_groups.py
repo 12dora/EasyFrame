@@ -37,6 +37,7 @@ def _prefix_rules(groups: PlatformRouteGroups, include_authz_integration: bool) 
         _PrefixRule("/users/me/totp", lambda: groups.totp),
         _PrefixRule("/auth/", lambda: groups.auth),
         _PrefixRule("/app-settings", lambda: _app_settings_enabled(groups)),
+        _PrefixRule("/notification-settings", lambda: groups.notification_settings),
         _PrefixRule("/notifications", lambda: groups.notifications),
         _PrefixRule("/identity-integration", lambda: groups.identity),
         _PrefixRule("/authz-integration", lambda: groups.easyauth and include_authz_integration),

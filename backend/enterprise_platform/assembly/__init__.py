@@ -18,6 +18,7 @@ from enterprise_platform.assembly.contracts import (
     IDENTITY_MANAGE,
     IDENTITY_VIEW,
     NOTIFICATION_CENTER_VIEW,
+    NOTIFICATION_SETTINGS_MANAGE,
     SETTINGS_UPDATE,
     UPSTREAM_MANAGE,
     UPSTREAM_VIEW,
@@ -29,6 +30,7 @@ from enterprise_platform.assembly.dependencies import build_assembly_dependencie
 from enterprise_platform.assembly.footer_notification_routes import register_footer_notification_routes
 from enterprise_platform.assembly.integration_routes import register_integration_routes
 from enterprise_platform.assembly.login_routes import register_login_routes
+from enterprise_platform.assembly.notification_settings_routes import register_notification_settings_routes
 from enterprise_platform.assembly.ops_routes import register_ops_routes
 from enterprise_platform.assembly.route_groups import apply_route_groups
 from enterprise_platform.auth import authenticate_login as authenticate_login
@@ -62,6 +64,8 @@ def create_platform_router(
     register_login_routes(router, ctx)
     register_account_routes(router, ctx)
     register_footer_notification_routes(router, ctx)
+    if ports.notification_settings is not None and ports.notification_catalog is not None:
+        register_notification_settings_routes(router, ctx)
     register_integration_routes(router, ctx)
     register_ops_routes(router, ctx)
     apply_route_groups(
@@ -80,6 +84,7 @@ __all__ = [
     "IDENTITY_MANAGE",
     "IDENTITY_VIEW",
     "NOTIFICATION_CENTER_VIEW",
+    "NOTIFICATION_SETTINGS_MANAGE",
     "SETTINGS_UPDATE",
     "UPSTREAM_MANAGE",
     "UPSTREAM_VIEW",

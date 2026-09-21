@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Literal, Protocol
 
 from enterprise_platform.easyauth.types import DirectorySnapshotMeta, DirectoryUserRecord
+from enterprise_platform.notification_settings import NotificationSettingsPort as NotificationSettingsPort
 from enterprise_platform.schemas import (
     AuthorizationCatalogItem,
     AuthorizationConnectionResult,

@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import Request
 
+from enterprise_platform.notification_settings import NotificationCatalog, NotificationSettingsPort
 from enterprise_platform.ports import (
     AccountPort,
     AppSettingsPort,
@@ -32,6 +33,7 @@ AUTHZ_MANAGE = "authz.integration.manage"
 UPSTREAM_VIEW = "ops.upstream_health.view"
 UPSTREAM_MANAGE = "ops.upstream_health.manage"
 NOTIFICATION_CENTER_VIEW = "notification.center.view"
+NOTIFICATION_SETTINGS_MANAGE = "notification.settings.manage"
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,8 @@ class PlatformPorts:
     upstream_health: UpstreamHealthPort
     require_permission: PermissionCheck
     authorization: AuthorizationOperationsPort | None = None
+    notification_settings: NotificationSettingsPort | None = None
+    notification_catalog: NotificationCatalog | None = None
 
 
 def _noop_before_password_login(_username: str, _request: Request) -> None:
@@ -100,3 +104,4 @@ class PlatformRouteGroups:
     identity: bool = True
     easyauth: bool = True
     upstream: bool = True
+    notification_settings: bool = True
