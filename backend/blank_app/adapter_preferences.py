@@ -23,7 +23,7 @@ class UiPreferencesMixin:
 
     def update_ui_preferences(self, account_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         with SessionLocal() as db:
-            account = db.get(Account, account_id)
+            account = db.get(Account, account_id, with_for_update=True)
             if account is None:
                 raise AuthError(401, "登录态无效")
             prefs = dict(account.ui_preferences) if isinstance(account.ui_preferences, dict) else {}

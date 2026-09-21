@@ -1,79 +1,59 @@
-# 表格密度（按账号保存的行高偏好）
+# 视觉效果（按账号保存的表格行高与表单行距）
 
-列表页的行高不是某一张表的事：同一个人在不同列表之间来回切，行高必须处处一致，否则每换一页
-都要重新对焦。所以档位是一份**账号偏好**（紧凑 / 宽松，缺省紧凑），存在服务端而不是浏览器里
-——换台机器、换个浏览器，列表还是自己习惯的那一档，也就不会出现「本地存了一份、服务端存了
-另一份」的两个事实源。
+设置 → 外观的「视觉效果」包含两项独立偏好，均为紧凑 / 宽松，缺省紧凑：
 
-判定与界面都在 EasyUI（`TableDensityProvider` / `EnterpriseAppearanceSettingsSurface`），
-宿主只接线。
+| 界面 | API 字段 | 账号 JSON 键 | EasyUI Provider | 作用 |
+| --- | --- | --- | --- | --- |
+| 表格 | `tableDensity` | `table_density` | `TableDensityProvider` | antd 表格 `size`（`small` / `middle`） |
+| 行距 | `rowSpacing` | `row_spacing` | `RowSpacingProvider` | 表单标签、纵向栈与区块之间的间距 |
 
-## 线合同
+偏好存在账号的 `platform_accounts.ui_preferences`，浏览器身份快照只是缓存。
+`RowSpacingProvider` 是 `<html data-ui-density>` 的唯一写入方；表格 Provider 只管表格行高。
+宿主全局样式需要引入 `@easy-enterprise/ui/theme.css`。
 
-值随身份一起到，改档单独写回：
+## API 契约
 
-- `GET /api/v1/auth/session` → `preferences.tableDensity`：`"compact"` | `"comfortable"`。
-  字段缺失、为 `null` 或是不认得的值，一律按契约默认值 `"compact"` 读（**契约水合，不是兼容
-  垫片**：后端补齐这个字段之前，前端也必须给出一个确定的默认）。
-- `PATCH /api/v1/auth/preferences`，请求体 `{ "tableDensity": "compact" | "comfortable" }`，
-  成功返回更新后的 `AuthSession`（与 `GET /auth/session` 同一个形状）。
+- `GET /api/v1/auth/session` 同时返回 `preferences.tableDensity` 与 `preferences.rowSpacing`。
+  历史账号没有 `row_spacing` 时，行距独立回落到 `compact`，不继承表格档位。
+- `PATCH /api/v1/auth/preferences` 只发送要改的字段，例如 `{ "rowSpacing": "comfortable" }`。
+  两字段都可省略；省略或 `null` 不改原值，未知键与非法档位返回 422。
+  成功返回与 GET 相同形状的 `AuthSession`。
+- 两条路由只要求登录，不要求业务权限码。审计事件 `auth.preferences.update` 的 before / after
+  包含两项偏好。补丁合并与写入必须在同一行锁事务内完成，防止并发请求互相覆盖。
+- 已有 `ui_preferences` JSON 列即可保存新键，不需要增加列或迁移。
 
-两条路由都只校验登录、不校验权限码，由 `enterprise_platform` 提供；后端细节与宿主后端清单见
-[PERMISSION_ONBOARDING.md](PERMISSION_ONBOARDING.md)。
+共享账户路由与宿主后端接入说明见 [PERMISSION_ONBOARDING.md](PERMISSION_ONBOARDING.md)。
 
-## 前端接线（blank 模板里已经做好的四处）
+## 前端接线
 
-1. **身份带着档位**（`lib/shell-adapter.ts`）：`ShellIdentity.tableDensity`；`/auth/session` 落地成
-   `ShellSession { permissionRequestUrl, tableDensity }`（`tableDensityOf()` 负责水合）；
-   写回是 `saveTableDensity(next)` → `PATCH /auth/preferences`，返回更新后的会话。
-   `/auth/me` 交出的身份先拿默认值，等 `/auth/session` 后台补——外壳不为这条附属请求多等一毫秒。
-2. **Provider 挂在「身份可用」那一层**（`components/table-density.tsx` +
-   `components/blank-shell.tsx` 的 `BlankShellIdentityProvider`）：身份 context 外面套一层
-   `TableDensityProvider`，外壳每包一次身份，行高就只接一次。写回是**乐观**的：点下去表格立刻
-   换档（等一趟往返再变会让人以为没点上），失败回滚到身份里的那个值并 `toast.error`。
-   成功后把新档位写回身份快照（`writeCachedIdentity`）——不然下一次身份复查落地时，那份还没
-   刷新过的旧偏好会把刚改的档位顶回去。
-3. **设置 → 外观**（`app/[locale]/app/settings/appearance/page.tsx`）：整页就是
-   `EnterpriseAppearanceSettingsSurface`（自带 `PageHeader`，本页唯一的 H1）。它只读写上面那份
-   上下文，自己既不取数也不落盘，所以「设置页改一下」与「所有列表页的行高」天然是同一个事实源。
-   **没有权限门禁**：只改当前账号自己的偏好，任何登录用户都进得去，导航项因此无条件出现
-   （`components/blank-shell.tsx` 的 `settingsItems`，排在「通用」之后）。同一页还有一张全局的
-   「显示页脚」卡片，只给有 `settings.app_setting.update` 的人（`canManageGlobal`），见
-   [GENERAL_SETTINGS.md](GENERAL_SETTINGS.md)。
-4. **表格什么都不用做**：`DataTable` / `ClientTable` 各自读 `useTableDensity()`
-   （紧凑 → antd `size="small"`，宽松 → `"middle"`）。页面不传 `density`、不落盘，
-   `components/examples/table-example.tsx` 就是原样的例子。
+1. `lib/shell-adapter.ts`：`ShellIdentity` 与 `ShellSession` 同时携带两项偏好；
+   `saveTableDensity()` / `saveRowSpacing()` 各自只 PATCH 一个字段。
+   `/auth/me` 先让外壳可用，`/auth/session` 后台补齐偏好。
+2. `lib/identity-cache.ts`：身份快照同时保存两项，在 session 落地之前沿用缓存；
+   `sameIdentity` 比较两项值。保存成功只合并本次修改的字段，保留当前身份中的其他字段。
+   缓存已清除、账号或会话代次变化时，迟到响应不能重建旧身份。
+3. `components/table-density.tsx` 与 `components/row-spacing.tsx`：外壳身份层挂上两个 Provider。
+   在途请求乐观更新，失败回滚并提示；完成后以身份快照为准，后续身份刷新仍能更新显示。
+   同一项保存时禁用该行选择，另一项可独立保存。
+4. `app/[locale]/app/settings/appearance/page.tsx` 使用 `EnterpriseAppearanceSettingsSurface`。
+   外观无需业务权限，导航恒显示；同页全局「显示页脚」仍要求 `settings.app_setting.update`，
+   见 [GENERAL_SETTINGS.md](GENERAL_SETTINGS.md)。
 
-文案（`t.navigation.appearance`、`t.appearanceSettings`）由 `createEnterpriseLabelCatalog` 的
-zh / en 两份提供，宿主不必自己写。提示通道用根布局已经挂好的 `<Toaster />`。
+文案由 `createEnterpriseLabelCatalog` 的 zh / en 两份提供，错误提示使用根布局 `<Toaster />`。
 
 ## 宿主镜像清单
 
-子模块更新后（EasyFrame + EasyUI 两个指针都要升），对照 blank：
+- 更新 EasyFrame 与 EasyUI 子模块，镜像后端偏好适配器的两键合并与事务锁。
+- 镜像 shell adapter、身份缓存、后台 session 加载和两个 Provider；检查缓存版本与旧数据水合。
+- 每个独立身份外壳都挂两个 Provider，包含 EasyLearning 的答题页 `TakingFrame`。
+- 纵向布局按 EasyUI 的 `ui-stack-sm` / `ui-stack` / `ui-stack-lg` 尺度接入；
+  横向间距、内边距、控件高度、表格内部与文字簇间距不随这次清扫改变。
+- 验证两字段默认值与单字段 PATCH、两项并发保存、同项重复点击、失败回滚、身份刷新，
+  以及退出登录或切换账号后的迟到响应。后端并发测试必须使用隔离 PostgreSQL 库。
 
-- `lib/shell-adapter.ts` — `ShellIdentity` 加 `tableDensity`；`/auth/session` 的返回值从
-  `string | null` 改成 `ShellSession`；新增 `tableDensityOf()` 与 `saveTableDensity()`。
-- `lib/identity-cache.ts` — 快照带上 `tableDensity`（读回时同样水合），**`CACHE_VERSION` +1**
-  （模板：1 → 2），`sameIdentity` 的标量键加上它，`reconcileIdentity` 在 `/auth/session`
-  落地之前沿用快照里的档位（否则选了「宽松」的人每次刷新都要先看一眼紧凑的表格再跳回去）。
-- `components/use-shell-identity.ts`（或宿主同名钩子）— `session` 落地时一并把
-  `tableDensity` 写进身份，`sessionSettled = true`（服务端的答案即权威）。
-- `components/table-density.tsx` — 整份复制，改 `TOAST_ID` 前缀。
-- 外壳的身份 provider — 在身份 context 里面套 `TableDensityProvider`；**每一个**自带身份的
-  外壳都要（EasyLearning 的答题页框架 `TakingFrame` 是第二个）。
-- `app/…/settings/appearance/page.tsx` — 新增，无门禁；设置导航加「外观」项，`allowed` 恒真。
-- 测试 — 适配器（水合 + PATCH 形状）、快照（往返 + 对账）、provider（乐观 / 回滚 / 回写快照 /
-  不碰浏览器存储）、e2e（设置页改档 → 列表页换档 → 刷新仍在）。
+EasyUI 的表格导出来自 `@easy-enterprise/ui/table`；行距导出
+`RowSpacingProvider`、`useRowSpacing`、`RowSpacing` 来自 `@easy-enterprise/ui`。
 
-EasyUI 导出名：`TableDensityProvider`、`useTableDensity`、`TableDensity`、
-`DEFAULT_TABLE_DENSITY`、`tableSizeOf`（`@easy-enterprise/ui/table`）；
-`EnterpriseAppearanceSettingsSurface`、`EnterpriseAppearanceSettingsLabels`
-（`@easy-enterprise/ui/enterprise`）。
-
-## 与 EasyLearning 实现的差异
-
-- EasyLearning 在 `components/common/antd-provider.tsx` 里把两档的竖向内边距各收一档
-  （`cellPaddingBlockSM: 10` / `cellPaddingBlockMD: 14`），让带行内动作的行落在 48 / 56px。
-  那是它自己的控件几何，模板不带这一条；宿主的列表有行内动作时可以照抄。
-- 模板的 provider 叫 `BlankTableDensityProvider`，住在 `components/`（blank 没有
-  `components/common/` 这一层）。
+EasyLearning 额外在 `components/common/antd-provider.tsx` 将表格竖向内边距设为
+`cellPaddingBlockSM: 10` / `cellPaddingBlockMD: 14`，使带行内动作的表格行为 48 / 56px；
+这是宿主控件尺寸，不属于表单行距。
