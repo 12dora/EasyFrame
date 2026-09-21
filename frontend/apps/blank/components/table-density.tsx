@@ -1,10 +1,10 @@
 "use client";
 
-import { TableDensityProvider, type TableDensity } from "@easy-enterprise/ui/table";
+import { TableDensityProvider } from "@easy-enterprise/ui/table";
 import { toast } from "@easy-enterprise/ui/toast";
 import { usePathname } from "next/navigation";
-import { useCallback, useState, type ReactNode } from "react";
-import { writeCachedIdentity } from "../lib/identity-cache";
+import { type ReactNode } from "react";
+import { useAccountPreference } from "./use-account-preference";
 import { localeOf, messages } from "../lib/messages";
 import { saveTableDensity, type ShellIdentity } from "../lib/shell-adapter";
 
@@ -26,27 +26,9 @@ export function BlankTableDensityProvider({ identity, children }: { identity: Sh
   // 而写回失败时要说一句跟站点语言一致的话。
   const locale = localeOf(usePathname()?.split("/")[1] ?? "");
   const t = messages(locale);
-  // 在途 / 已写回的乐观值;null 表示「以身份里的为准」。
-  const [pending, setPending] = useState<TableDensity | null>(null);
-  const [saving, setSaving] = useState(false);
-  const density = pending ?? identity.tableDensity;
-
-  const change = useCallback(
-    async (next: TableDensity) => {
-      setPending(next);
-      setSaving(true);
-      try {
-        const session = await saveTableDensity(next);
-        setPending(session.tableDensity);
-        writeCachedIdentity(locale, { ...identity, tableDensity: session.tableDensity });
-      } catch {
-        setPending(null);
-        toast.error(t.appearanceSettings.saveFailed, { id: TOAST_ID });
-      } finally {
-        setSaving(false);
-      }
-    },
-    [identity, locale, t.appearanceSettings.saveFailed],
+  const { value: density, saving, change } = useAccountPreference(
+    identity, locale, "tableDensity", saveTableDensity,
+    () => toast.error(t.appearanceSettings.saveFailed, { id: TOAST_ID }),
   );
 
   return (

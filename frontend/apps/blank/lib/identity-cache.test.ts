@@ -5,6 +5,8 @@ import { asyncDataGeneration, hasAsyncData, subscribeAsyncData, writeAsyncData, 
 import { AUTH_TOKEN_STORAGE_KEY, endLocalSession, enterpriseLogoutAdapter, logout } from "./auth-adapter";
 import {
   IDLE_TIMEOUT_MS,
+  identitySessionGeneration,
+  patchCachedPreference,
   clearCachedIdentity,
   readCachedIdentity,
   reconcileIdentity,
@@ -56,6 +58,34 @@ beforeEach(() => {
   clearCachedIdentity();
   window.sessionStorage.clear();
   window.localStorage.clear();
+});
+
+describe("preference cache patches", () => {
+  it("keeps the latest unrelated fields and the other preference", () => {
+    writeCachedIdentity("zh-CN", identity());
+    const generation = identitySessionGeneration();
+    writeCachedIdentity("zh-CN", identity({ name: "新姓名", tableDensity: "comfortable" }));
+    patchCachedPreference("zh-CN", "u1", generation, "rowSpacing", "comfortable");
+    expect(readCachedIdentity("zh-CN")).toMatchObject({ name: "新姓名", tableDensity: "comfortable", rowSpacing: "comfortable" });
+  });
+
+  it("does not create a missing identity or patch another account or locale", () => {
+    patchCachedPreference("zh-CN", "u1", identitySessionGeneration(), "rowSpacing", "comfortable");
+    expect(readCachedIdentity("zh-CN")).toBeNull();
+    writeCachedIdentity("zh-CN", identity({ accountId: "u2" }));
+    patchCachedPreference("zh-CN", "u1", identitySessionGeneration(), "rowSpacing", "comfortable");
+    patchCachedPreference("en", "u2", identitySessionGeneration(), "rowSpacing", "comfortable");
+    expect(readCachedIdentity("zh-CN")?.rowSpacing).toBe("compact");
+  });
+
+  it("invalidates a request when the same account logs in again", () => {
+    writeCachedIdentity("zh-CN", identity());
+    const generation = identitySessionGeneration();
+    clearCachedIdentity();
+    writeCachedIdentity("zh-CN", identity());
+    patchCachedPreference("zh-CN", "u1", generation, "rowSpacing", "comfortable");
+    expect(readCachedIdentity("zh-CN")?.rowSpacing).toBe("compact");
+  });
 });
 
 describe("identity snapshot", () => {

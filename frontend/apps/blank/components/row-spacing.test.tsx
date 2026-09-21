@@ -11,10 +11,11 @@ import type { ShellIdentity } from "../lib/shell-adapter";
  * (e) 只送 `rowSpacing` 这一个键:另一份偏好(表格行高)不许被这一次写回带偏。
  */
 
-const api = vi.hoisted(() => ({ saveRowSpacing: vi.fn() }));
+const api = vi.hoisted(() => ({ saveRowSpacing: vi.fn(), saveTableDensity: vi.fn() }));
 vi.mock("../lib/shell-adapter", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/shell-adapter")>()),
   saveRowSpacing: api.saveRowSpacing,
+  saveTableDensity: api.saveTableDensity,
 }));
 
 const toasts = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), error: vi.fn(), info: vi.fn() }));
@@ -25,6 +26,8 @@ beforeAll(async () => { await import("./row-spacing"); }, 60_000);
 
 const { BlankRowSpacingProvider } = await import("./row-spacing");
 const { useRowSpacing } = await import("@easy-enterprise/ui");
+const { BlankTableDensityProvider } = await import("./table-density");
+const { useTableDensity } = await import("@easy-enterprise/ui/table");
 const { clearCachedIdentity, readCachedIdentity, writeCachedIdentity } = await import("../lib/identity-cache");
 const { messages } = await import("../lib/messages");
 
@@ -63,6 +66,11 @@ function Probe() {
   );
 }
 
+function TableProbe() {
+  const { setDensity } = useTableDensity();
+  return <button type="button" data-test-id="table" onClick={() => void setDensity("comfortable")}>table</button>;
+}
+
 const actEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
 let container: HTMLDivElement;
 let root: Root;
@@ -70,6 +78,7 @@ let root: Root;
 beforeEach(() => {
   actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
   api.saveRowSpacing.mockReset();
+  api.saveTableDensity.mockReset();
   for (const fn of Object.values(toasts)) fn.mockReset();
   clearCachedIdentity();
   window.sessionStorage.clear();
@@ -95,6 +104,29 @@ function probe(): HTMLElement {
 }
 
 describe("BlankRowSpacingProvider", () => {
+  it.each([true, false])("merges interleaved saves without overwriting the other preference: tableFirst=%s", async (tableFirst) => {
+    let settleRow!: (value: unknown) => void;
+    let settleTable!: (value: unknown) => void;
+    api.saveRowSpacing.mockReturnValue(new Promise((resolve) => { settleRow = resolve; }));
+    api.saveTableDensity.mockReturnValue(new Promise((resolve) => { settleTable = resolve; }));
+    const original = identity();
+    writeCachedIdentity("zh-CN", original);
+    act(() => root.render(
+      <BlankTableDensityProvider identity={original}>
+        <BlankRowSpacingProvider identity={original}><Probe /><TableProbe /></BlankRowSpacingProvider>
+      </BlankTableDensityProvider>,
+    ));
+    await act(async () => {
+      probe().click();
+      container.querySelector<HTMLButtonElement>('[data-test-id="table"]')!.click();
+    });
+    const row = () => settleRow({ tableDensity: "compact", rowSpacing: "comfortable" });
+    const table = () => settleTable({ tableDensity: "comfortable", rowSpacing: "compact" });
+    await act(async () => { (tableFirst ? table : row)(); });
+    await act(async () => { (tableFirst ? row : table)(); });
+    expect(readCachedIdentity("zh-CN")).toMatchObject({ tableDensity: "comfortable", rowSpacing: "comfortable" });
+  });
+
   it("serves the spacing stored on the account, defaulting to compact", () => {
     render(identity());
     expect(probe().dataset.spacing).toBe("compact");
@@ -136,6 +168,64 @@ describe("BlankRowSpacingProvider", () => {
     expect(probe().dataset.spacing).toBe("compact");
     expect(probe().dataset.saving).toBe("false");
     expect(toasts.error).toHaveBeenCalledWith(t.appearanceSettings.saveFailed, expect.anything());
+  });
+
+  it("accepts later identity preferences after a successful save", async () => {
+    api.saveRowSpacing.mockResolvedValue({ tableDensity: "comfortable", rowSpacing: "comfortable" });
+    render(identity());
+    await act(async () => { probe().click(); });
+    expect(probe().dataset.spacing).toBe("comfortable");
+    render(identity({ rowSpacing: "compact" }));
+    expect(probe().dataset.spacing).toBe("compact");
+  });
+
+  it("allows only one write while this preference is saving", async () => {
+    let settle!: (value: unknown) => void;
+    api.saveRowSpacing.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+    render(identity());
+    await act(async () => { probe().click(); });
+    await act(async () => { probe().click(); });
+    expect(api.saveRowSpacing).toHaveBeenCalledTimes(1);
+    await act(async () => { settle({ tableDensity: "comfortable", rowSpacing: "comfortable" }); });
+    expect(probe().dataset.saving).toBe("false");
+  });
+
+  it.each(["clear", "switch", "same-account-login", "unmount"])("ignores a completion after %s", async (transition) => {
+    let settle!: (value: unknown) => void;
+    api.saveRowSpacing.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+    writeCachedIdentity("zh-CN", identity());
+    render(identity());
+    await act(async () => { probe().click(); });
+    act(() => {
+      if (transition === "unmount") root.render(null);
+      else if (transition === "switch") {
+        writeCachedIdentity("zh-CN", identity({ accountId: "u2" }));
+        render(identity({ accountId: "u2" }));
+      } else {
+        clearCachedIdentity();
+        if (transition === "same-account-login") writeCachedIdentity("zh-CN", identity());
+      }
+    });
+    await act(async () => { settle({ tableDensity: "comfortable", rowSpacing: "comfortable" }); });
+    const cached = readCachedIdentity("zh-CN");
+    if (transition === "clear") expect(cached).toBeNull();
+    else {
+      expect(cached?.accountId).toBe(transition === "switch" ? "u2" : "u1");
+      expect(cached?.rowSpacing).toBe("compact");
+    }
+    expect(toasts.error).not.toHaveBeenCalled();
+  });
+
+  it("drops old-account errors and immediately uses the new account preference", async () => {
+    let reject!: (reason: Error) => void;
+    api.saveRowSpacing.mockReturnValue(new Promise((_resolve, fail) => { reject = fail; }));
+    render(identity());
+    await act(async () => { probe().click(); });
+    render(identity({ accountId: "u2" }));
+    expect(probe().dataset.spacing).toBe("compact");
+    expect(probe().dataset.saving).toBe("false");
+    await act(async () => { reject(new Error("old request failed")); });
+    expect(toasts.error).not.toHaveBeenCalled();
   });
 
   it("never touches browser storage for the preference", async () => {

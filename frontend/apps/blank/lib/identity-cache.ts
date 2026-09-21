@@ -46,6 +46,10 @@ const CAPABILITY_KEYS = [
 /** The current identity for this page load. A forced-password-change identity lives only here. */
 let memory: { locale: string; identity: ShellIdentity } | null = null;
 const listeners = new Set<() => void>();
+let sessionGeneration = 0;
+
+/** Invalidates old preference requests, even when the same account logs in again. */
+export function identitySessionGeneration(): number { return sessionGeneration; }
 
 /** The subscribe half of `useSyncExternalStore`. */
 export function subscribeCachedIdentity(listener: () => void): () => void {
@@ -183,7 +187,10 @@ export function readCachedIdentity(locale: string): ShellIdentity | null {
  */
 export function writeCachedIdentity(locale: string, identity: ShellIdentity): void {
   // Another account: the previous person's read cache (`useAsyncData`) goes with it, and mounted pages refetch.
-  if (memory && memory.identity.accountId !== identity.accountId) clearAsyncDataCache();
+  if (memory && memory.identity.accountId !== identity.accountId) {
+    sessionGeneration += 1;
+    clearAsyncDataCache();
+  }
   memory = { locale, identity };
   if (typeof window === "undefined") return;
   writeRaw(identity.mustChangePassword ? null : JSON.stringify({ v: CACHE_VERSION, locale, identity: { ...identity, permissions: [...identity.permissions] } }));
@@ -202,10 +209,20 @@ export function writeCachedIdentity(locale: string, identity: ShellIdentity): vo
  * and refetching now would only hit a 401 with no credential.
  */
 export function clearCachedIdentity(): void {
+  sessionGeneration += 1;
   memory = null;
   clearAsyncDataCache({ refetch: false });
   if (typeof window !== "undefined") writeRaw(null);
   emit();
+}
+
+/** Patch only the completed preference into the current session, never the request's old snapshot. */
+export function patchCachedPreference(
+  locale: string, accountId: string, generation: number,
+  key: "tableDensity" | "rowSpacing", value: TableDensity | RowSpacing,
+): void {
+  if (generation !== sessionGeneration || memory?.locale !== locale || memory.identity.accountId !== accountId) return;
+  writeCachedIdentity(locale, { ...memory.identity, [key]: value });
 }
 
 function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {

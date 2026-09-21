@@ -1,10 +1,10 @@
 "use client";
 
-import { RowSpacingProvider, type RowSpacing } from "@easy-enterprise/ui";
+import { RowSpacingProvider } from "@easy-enterprise/ui";
 import { toast } from "@easy-enterprise/ui/toast";
 import { usePathname } from "next/navigation";
-import { useCallback, useState, type ReactNode } from "react";
-import { writeCachedIdentity } from "../lib/identity-cache";
+import { type ReactNode } from "react";
+import { useAccountPreference } from "./use-account-preference";
 import { localeOf, messages } from "../lib/messages";
 import { saveRowSpacing, type ShellIdentity } from "../lib/shell-adapter";
 
@@ -27,27 +27,9 @@ export function BlankRowSpacingProvider({ identity, children }: { identity: Shel
   // 而写回失败时要说一句跟站点语言一致的话。
   const locale = localeOf(usePathname()?.split("/")[1] ?? "");
   const t = messages(locale);
-  // 在途 / 已写回的乐观值;null 表示「以身份里的为准」。
-  const [pending, setPending] = useState<RowSpacing | null>(null);
-  const [saving, setSaving] = useState(false);
-  const spacing = pending ?? identity.rowSpacing;
-
-  const change = useCallback(
-    async (next: RowSpacing) => {
-      setPending(next);
-      setSaving(true);
-      try {
-        const session = await saveRowSpacing(next);
-        setPending(session.rowSpacing);
-        writeCachedIdentity(locale, { ...identity, rowSpacing: session.rowSpacing });
-      } catch {
-        setPending(null);
-        toast.error(t.appearanceSettings.saveFailed, { id: TOAST_ID });
-      } finally {
-        setSaving(false);
-      }
-    },
-    [identity, locale, t.appearanceSettings.saveFailed],
+  const { value: spacing, saving, change } = useAccountPreference(
+    identity, locale, "rowSpacing", saveRowSpacing,
+    () => toast.error(t.appearanceSettings.saveFailed, { id: TOAST_ID }),
   );
 
   return (

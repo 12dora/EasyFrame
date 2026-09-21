@@ -135,6 +135,64 @@ describe("BlankTableDensityProvider", () => {
     expect(toasts.error).toHaveBeenCalledWith(t.appearanceSettings.saveFailed, expect.anything());
   });
 
+  it("accepts later identity preferences after a successful save", async () => {
+    api.saveTableDensity.mockResolvedValue({ tableDensity: "comfortable", rowSpacing: "comfortable" });
+    render(identity());
+    await act(async () => { probe().click(); });
+    expect(probe().dataset.density).toBe("comfortable");
+    render(identity({ tableDensity: "compact" }));
+    expect(probe().dataset.density).toBe("compact");
+  });
+
+  it("allows only one write while this preference is saving", async () => {
+    let settle!: (value: unknown) => void;
+    api.saveTableDensity.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+    render(identity());
+    await act(async () => { probe().click(); });
+    await act(async () => { probe().click(); });
+    expect(api.saveTableDensity).toHaveBeenCalledTimes(1);
+    await act(async () => { settle({ tableDensity: "comfortable", rowSpacing: "comfortable" }); });
+    expect(probe().dataset.saving).toBe("false");
+  });
+
+  it.each(["clear", "switch", "same-account-login", "unmount"])("ignores a completion after %s", async (transition) => {
+    let settle!: (value: unknown) => void;
+    api.saveTableDensity.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+    writeCachedIdentity("zh-CN", identity());
+    render(identity());
+    await act(async () => { probe().click(); });
+    act(() => {
+      if (transition === "unmount") root.render(null);
+      else if (transition === "switch") {
+        writeCachedIdentity("zh-CN", identity({ accountId: "u2" }));
+        render(identity({ accountId: "u2" }));
+      } else {
+        clearCachedIdentity();
+        if (transition === "same-account-login") writeCachedIdentity("zh-CN", identity());
+      }
+    });
+    await act(async () => { settle({ tableDensity: "comfortable", rowSpacing: "comfortable" }); });
+    const cached = readCachedIdentity("zh-CN");
+    if (transition === "clear") expect(cached).toBeNull();
+    else {
+      expect(cached?.accountId).toBe(transition === "switch" ? "u2" : "u1");
+      expect(cached?.tableDensity).toBe("compact");
+    }
+    expect(toasts.error).not.toHaveBeenCalled();
+  });
+
+  it("drops old-account errors and immediately uses the new account preference", async () => {
+    let reject!: (reason: Error) => void;
+    api.saveTableDensity.mockReturnValue(new Promise((_resolve, fail) => { reject = fail; }));
+    render(identity());
+    await act(async () => { probe().click(); });
+    render(identity({ accountId: "u2" }));
+    expect(probe().dataset.density).toBe("compact");
+    expect(probe().dataset.saving).toBe("false");
+    await act(async () => { reject(new Error("old request failed")); });
+    expect(toasts.error).not.toHaveBeenCalled();
+  });
+
   it("never touches browser storage for the preference", async () => {
     api.saveTableDensity.mockResolvedValue({ permissionRequestUrl: null, tableDensity: "comfortable" });
     render(identity());
