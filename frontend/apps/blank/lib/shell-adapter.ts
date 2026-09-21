@@ -252,12 +252,19 @@ export const generalSettingsAdapter: EnterpriseGeneralSettingsAdapter = { load: 
  * 409 不做任何包装:`platformRequest` 失败时抛的 `PlatformRequestError` 自带 `status`,
  * 正好命中共享包的 `isNotificationManagedConflict`(它只认 `status === 409` 或
  * `code === "notification_group_managed"`,不 `instanceof` 具体错误类),页面据此回滚并重读。
+ *
+ * 两个读都带 `cache: "no-store"`,为的是**退出在途 GET 合并**(`sharedGetKey` 只合并「除
+ * `method` 外没有任何 fetch 选项」的纯 GET,多一个键就不合并了)。这一页的重读全是
+ * 「刚写完,再读一遍」:切页签要重拉,PATCH 撞上 409 之后更要重拉——而 409 恰恰意味着
+ * 分组在这段时间里被改成了托管。若这次恢复性重读并到了冲突**之前**就已在途的那一个 GET 上,
+ * 回来的是一份仍然「未托管」的旧视图,页面会拿它当新事实画上去,用户看到的就是一张点不动
+ * 却不说明原因的表。`no-store` 本身对这几个私有响应也正是想要的语义。
  */
 export const notificationSettingsAdapter: NotificationSettingsAdapter = {
-  load: () => platformRequest<NotificationSettingsView>("/api/v1/notification-settings"),
+  load: () => platformRequest<NotificationSettingsView>("/api/v1/notification-settings", { cache: "no-store" }),
   savePreference: (change: NotificationSwitchChange) =>
     platformRequest<NotificationGroupView>("/api/v1/notification-settings/preferences", { method: "PATCH", body: JSON.stringify(change) }),
-  loadPolicy: () => platformRequest<NotificationPolicyView>("/api/v1/notification-settings/policy"),
+  loadPolicy: () => platformRequest<NotificationPolicyView>("/api/v1/notification-settings/policy", { cache: "no-store" }),
   savePolicy: (change: NotificationPolicyChange) =>
     platformRequest<NotificationGroupView>("/api/v1/notification-settings/policy", { method: "PATCH", body: JSON.stringify(change) }),
 };

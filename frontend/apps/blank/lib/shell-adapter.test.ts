@@ -187,6 +187,31 @@ describe("notificationSettingsAdapter", () => {
     expect(JSON.parse(String(calls[3][1]?.body))).toEqual({ group: "exam", managed: true });
   });
 
+  /**
+   * 两次重叠的读必须各发各的:`platformRequest` 会合并在途的纯 GET,而这一页的重读全是
+   * 「刚写完,再读一遍」。PATCH 撞上 409 之后的那次恢复性重读一旦并到冲突之前就已在途的
+   * GET 上,回来的是一份仍然「未托管」的旧视图,页面会把它当成新事实。
+   */
+  it("keeps overlapping reads separate so a conflict reload never joins a stale GET", async () => {
+    let release: () => void = () => undefined;
+    const inFlight = new Promise<void>((resolve) => { release = resolve; });
+    const fetchMock = vi.fn(async () => { await inFlight; return new Response(JSON.stringify(group), { status: 200, headers: { "content-type": "application/json" } }); });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = notificationSettingsAdapter.load();
+    const second = notificationSettingsAdapter.load();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    release();
+    await Promise.all([first, second]);
+
+    // 退出合并靠的就是这个多出来的 fetch 选项(`sharedGetKey` 只合并「除 method 外别无选项」的 GET)。
+    const calls = fetchMock.mock.calls as unknown as FetchCall[];
+    expect(calls.map(([, init]) => init?.cache)).toEqual(["no-store", "no-store"]);
+    // 同一条路径的另一次读也一样不合并。
+    await Promise.all([notificationSettingsAdapter.loadPolicy(), notificationSettingsAdapter.loadPolicy()]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
   it("rejects a managed 409 in the shape the shared surface recognises", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: { code: "notification_group_managed" } }), { status: 409, headers: { "content-type": "application/json" } })));
 
