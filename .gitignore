@@ -14,3 +14,6 @@ backend/*.egg-info/
 
 # 本地开发 venv(测试走 run-local-tests.sh 或 make blank-check)
 backend/.venv/
+
+# 本机 dev 栈内存上限覆盖（见 apps/docs/host/ops.md）
+docker-compose.override.yml
