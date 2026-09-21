@@ -56,9 +56,12 @@ def cached_catalog_floor(db, app_key: str) -> int:
 
 def persist_easyauth_setting(data: dict[str, Any], *, actor_id: str, action: str) -> None:
     from blank_app.adapter_support import _save_setting
+    from blank_app.easyauth_manifest_sync import schedule_blank_manifest_sync
 
     _save_setting("easyauth", data, actor_id=actor_id, action=action)
     invalidate_easyauth()
+    # 设置已提交后再推;BLANK_RUNTIME_ENV=test 时调度函数直接返回。
+    schedule_blank_manifest_sync(force=True)
 
 
 def install_static_cache_watchers() -> None:

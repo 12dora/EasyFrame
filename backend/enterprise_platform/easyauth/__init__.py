@@ -1,4 +1,4 @@
-"""EasyAuth directory / notify 客户端(ORM 无关,不导入宿主模型)。"""
+"""EasyAuth directory / notify / manifest 同步客户端(ORM 无关,不导入宿主模型)。"""
 
 from enterprise_platform.easyauth.credentials import (
     OAUTH_CLIENT_CREDENTIALS,
@@ -22,6 +22,14 @@ from enterprise_platform.easyauth.errors import (
     NotifyRejectedError,
     NotifyThrottledError,
     NotifyUnavailableError,
+)
+from enterprise_platform.easyauth.manifest_sync import (
+    ManifestSyncResult,
+    ManifestSyncScheduler,
+    ManifestSyncStore,
+    ManifestSyncTarget,
+    manifest_content_hash,
+    sync_manifest,
 )
 from enterprise_platform.easyauth.notify import (
     NotifyClient,
@@ -65,6 +73,10 @@ __all__ = [
     "EasyAuthHttp",
     "EasyAuthProtocolError",
     "EasyAuthTransportError",
+    "ManifestSyncResult",
+    "ManifestSyncScheduler",
+    "ManifestSyncStore",
+    "ManifestSyncTarget",
     "NotifyClient",
     "NotifyDedupConflictError",
     "NotifyError",
@@ -85,6 +97,8 @@ __all__ = [
     "WebhookEvent",
     "WebhookVerificationError",
     "probe_notify_credential",
+    "manifest_content_hash",
     "resolve_bearer_token",
+    "sync_manifest",
     "verify_webhook",
 ]

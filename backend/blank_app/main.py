@@ -34,6 +34,7 @@ from blank_app.authz_api import (
 from blank_app.authz_api import router as authz_router
 from blank_app.authz_hotpath import shutdown_background_refresh
 from blank_app.database import SessionLocal
+from blank_app.easyauth_manifest_sync import schedule_blank_manifest_sync
 from blank_app.notification_catalog import notification_catalog
 from blank_app.oidc_adapter import BlankOidcHost
 from enterprise_platform import PlatformPorts, PlatformSecurityHooks, create_platform_router
@@ -69,6 +70,8 @@ async def lifespan(_app: FastAPI):
     validate_principal_config()
     seed_default_admin()
     seed_platform_catalog()
+    # 失败不阻塞启动；测试运行时函数内部直接返回。
+    schedule_blank_manifest_sync()
     try:
         yield
     finally:
