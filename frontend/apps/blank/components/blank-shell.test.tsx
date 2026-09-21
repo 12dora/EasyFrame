@@ -287,6 +287,36 @@ describe("BlankShell navigation intent", () => {
   });
 });
 
+describe("BlankShell settings panel", () => {
+  /** 打开设置面板,读出面板里的设置项(顺序 = `settingsItems` 的顺序)。 */
+  function settingsItems(): Array<[string | null, string | null]> {
+    click(byTestId("blank-nav-settings"));
+    return [...container.querySelectorAll<HTMLAnchorElement>('nav a[href^="/zh-CN/app/settings/"]')].map((link) => [link.getAttribute("href"), link.textContent]);
+  }
+
+  // 「通知」紧跟在「外观」后面,两者都不带权限门禁 —— 后端按 gate 权限过滤分组,
+  // 一个分组都没有的账号打开这一页看到的是空状态,不是 403。
+  it("keeps 通知 right after 外观 in the settings panel", () => {
+    render(identity());
+    expect(settingsItems()).toEqual([
+      ["/zh-CN/app/settings/general", "通用"],
+      ["/zh-CN/app/settings/appearance", "外观"],
+      ["/zh-CN/app/settings/notifications", "通知"],
+    ]);
+  });
+
+  // 只有业务权限、改不了通用设置的账号:「通用」消失,「外观」与「通知」照旧,
+  // 相对次序不变(通知也不跟着收件箱的 `notification.center.view` 走)。
+  it("keeps the two ungated items for an account without the app-settings grant", () => {
+    render(identity({ permissions: new Set(["identity.integration.view"]) }));
+    expect(settingsItems()).toEqual([
+      ["/zh-CN/app/settings/appearance", "外观"],
+      ["/zh-CN/app/settings/notifications", "通知"],
+      ["/zh-CN/app/settings/access", "登录与权限"],
+    ]);
+  });
+});
+
 describe("BlankShell notifications isolation", () => {
   // 外壳(侧栏与页面所在的那一层)不因通知加载态翻转而重画。
   it("loads notifications without re-rendering the shell", async () => {

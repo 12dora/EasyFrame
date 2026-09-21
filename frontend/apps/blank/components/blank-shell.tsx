@@ -160,6 +160,9 @@ export function BlankShell({ children, locale: rawLocale, initialGeneralSettings
       ...(canGeneral ? [{ key: "general", label: t.navigation.general, href: href("/app/settings/general"), active: activePrefix("/app/settings/general") }] : []),
       // 「外观」只改当前账号自己的偏好，没有权限门禁：任何登录用户都进得去。
       { key: "appearance", label: t.navigation.appearance, href: href("/app/settings/appearance"), active: activePrefix("/app/settings/appearance") },
+      // 「通知」同样没有门禁:后端按 gate 权限过滤分组,一个分组都没有的账号看到的是空状态,
+      // 不是 403。与收件箱(顶栏通知中心)是两件事,别用 `notification.center.view` 去卡它。
+      { key: "notifications", label: t.navigation.notificationSettings, href: href("/app/settings/notifications"), active: activePrefix("/app/settings/notifications") },
       ...(canSecurity ? [{ key: "security", label: t.navigation.security, href: href("/app/settings/security"), active: activePrefix("/app/settings/security") }] : []),
       ...(canAccess ? [{ key: "access", label: t.navigation.access, href: href("/app/settings/access"), active: activePrefix("/app/settings/access") }] : []),
       ...(canAccounts ? [{ key: "accounts", label: t.navigation.accounts, href: href("/app/settings/accounts"), active: activePrefix("/app/settings/accounts") }] : []),

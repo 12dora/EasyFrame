@@ -5,7 +5,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { loadAuthSession, loadShellIdentity, loadGeneralSettings, saveGeneralSettings, saveRowSpacing, saveTableDensity, startShellIdentityLoad, type ShellGeneralSettings } from "./shell-adapter";
+import { isNotificationManagedConflict } from "@easy-enterprise/ui/enterprise";
+
+import { loadAuthSession, loadShellIdentity, loadGeneralSettings, notificationSettingsAdapter, saveGeneralSettings, saveRowSpacing, saveTableDensity, startShellIdentityLoad, type ShellGeneralSettings } from "./shell-adapter";
 
 const labels = { admin: "管理员", user: "用户", guest: "游客", separator: "、" };
 
@@ -151,6 +153,56 @@ it("reads and writes the general settings on the app-settings route", async () =
   expect(calls[0][1]?.method ?? "GET").toBe("GET");
   expect(calls[1][1]?.method).toBe("PUT");
   expect(JSON.parse(String(calls[1][1]?.body))).toEqual(value);
+});
+
+/**
+ * 「设置 → 通知」的传输口:四个方法一一对应四个端点,两个 `save*` 把整条改动 PATCH 上去。
+ *
+ * 后两条用例钉的是 409 的**形状**:共享面用 `isNotificationManagedConflict` 判定托管冲突,
+ * 它只认带 `status === 409` 或 `code === "notification_group_managed"` 的 rejection。宿主这边
+ * 抛的是 `PlatformRequestError`(自带 `status`),所以 adapter 不必再包一层——这两条就是那个
+ * "不必"的证据,免得日后有人把错误换成没有 `status` 的类型,而页面悄悄不再回滚。
+ */
+describe("notificationSettingsAdapter", () => {
+  const group = { key: "exam", title: { zh: "考试", en: "Exams" }, description: { zh: "", en: "" }, managed: false, editable: true, scenes: [] };
+  const change = { group: "exam", scene: "exam.result_released", channel: "in_app", enabled: true } as const;
+
+  it("maps the four methods onto the notification-settings routes", async () => {
+    const fetchMock = respondWith(group);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await notificationSettingsAdapter.load();
+    await notificationSettingsAdapter.savePreference(change);
+    await notificationSettingsAdapter.loadPolicy();
+    await notificationSettingsAdapter.savePolicy({ group: "exam", managed: true });
+
+    const calls = fetchMock.mock.calls as unknown as FetchCall[];
+    expect(calls.map(([, init]) => init?.method ?? "GET")).toEqual(["GET", "PATCH", "GET", "PATCH"]);
+    expect(String(calls[0][0])).toContain("/api/v1/notification-settings");
+    expect(String(calls[1][0])).toContain("/api/v1/notification-settings/preferences");
+    expect(String(calls[2][0])).toContain("/api/v1/notification-settings/policy");
+    expect(String(calls[3][0])).toContain("/api/v1/notification-settings/policy");
+    // 两种改动原样送上去:渠道开关是四元组,托管开关是 `{group, managed}`。
+    expect(JSON.parse(String(calls[1][1]?.body))).toEqual(change);
+    expect(JSON.parse(String(calls[3][1]?.body))).toEqual({ group: "exam", managed: true });
+  });
+
+  it("rejects a managed 409 in the shape the shared surface recognises", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: { code: "notification_group_managed" } }), { status: 409, headers: { "content-type": "application/json" } })));
+
+    const error = await notificationSettingsAdapter.savePreference(change).then(() => null, (reason: unknown) => reason);
+    expect(error).not.toBeNull();
+    expect((error as { status?: unknown }).status).toBe(409);
+    expect(isNotificationManagedConflict(error)).toBe(true);
+  });
+
+  it("keeps an unrelated failure out of the managed-conflict path", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "boom" }), { status: 500, headers: { "content-type": "application/json" } })));
+
+    const error = await notificationSettingsAdapter.savePreference(change).then(() => null, (reason: unknown) => reason);
+    expect(error).not.toBeNull();
+    expect(isNotificationManagedConflict(error)).toBe(false);
+  });
 });
 
 /**

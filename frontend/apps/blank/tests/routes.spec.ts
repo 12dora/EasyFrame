@@ -4,6 +4,37 @@ const locales = ["zh-CN", "en"];
 
 const defaultGeneral = { titleZh: "", titleEn: "", subtitleZh: "", subtitleEn: "", footerHtmlZh: "企业框架 · © {year}", footerHtmlEn: "Enterprise framework · © {year}", logoDataUrl: null, showFooter: true };
 
+/**
+ * 「设置 → 通知」的固定数据:一个可编辑分组(exam)+ 一个平台托管分组(ops)。
+ *
+ * 托管的那一组在「我的通知」里整表置灰、标题行留下一枚静态标签与一枚只读开关;
+ * `exam.reminder` 的钉钉格是 `null`(本场景不支持该渠道),页面画破折号而不是开关。
+ * 场景 key 带点是正常的,`data-test-id` 里原样保留。
+ */
+type NotificationScene = { key: string; title: { zh: string; en: string }; description: { zh: string; en: string }; channels: Record<string, boolean | null> };
+type NotificationGroup = { key: string; title: { zh: string; en: string }; description: { zh: string; en: string }; managed: boolean; editable: boolean; scenes: NotificationScene[] };
+
+const notificationChannels = [{ key: "dingtalk", available: true }, { key: "in_app", available: true }];
+const notificationGroups: Record<string, NotificationGroup> = {
+  exam: {
+    key: "exam", title: { zh: "考试", en: "Exams" }, description: { zh: "考试相关通知", en: "Exam notifications" }, managed: false, editable: true,
+    scenes: [
+      { key: "exam.result_released", title: { zh: "成绩发布", en: "Results released" }, description: { zh: "成绩发布时通知", en: "When results are released" }, channels: { dingtalk: true, in_app: true } },
+      { key: "exam.reminder", title: { zh: "开考提醒", en: "Exam reminder" }, description: { zh: "开考前提醒", en: "Before the exam starts" }, channels: { dingtalk: null, in_app: false } },
+    ],
+  },
+  ops: {
+    key: "ops", title: { zh: "运维", en: "Operations" }, description: { zh: "系统服务通知", en: "System service notifications" }, managed: true, editable: false,
+    scenes: [{ key: "ops.upstream_down", title: { zh: "上游中断", en: "Upstream down" }, description: { zh: "上游不可用时通知", en: "When an upstream is unavailable" }, channels: { dingtalk: false, in_app: true } }],
+  },
+};
+
+/** PATCH 的响应是**更新后的整个分组**:页面拿服务端这一份替换乐观值,不自己拼结果。 */
+function notificationGroupAfter(change: { group: string; scene: string; channel: string; enabled: boolean }): NotificationGroup {
+  const base = notificationGroups[change.group];
+  return { ...base, scenes: base.scenes.map((scene) => (scene.key === change.scene ? { ...scene, channels: { ...scene.channels, [change.channel]: change.enabled } } : scene)) };
+}
+
 async function mockPlatform(page: Page, general: Record<string, unknown> = defaultGeneral) {
   let stored = { ...general };
   // 账号偏好(表格行高、行距)住在服务端:`PATCH /auth/preferences` 改的就是这一份,`/auth/session` 再读回去;
@@ -24,6 +55,16 @@ async function mockPlatform(page: Page, general: Record<string, unknown> = defau
     if (path === "/api/v1/auth/session") return json({ permissionRequestUrl: "https://easyauth.example.test/request", preferences });
     if (path === "/api/v1/auth/me") return json({ id: "u1", name: "Framework Admin", email: "admin@example.com", avatarUrl: null, hasLocalPassword: true, permissions: ["auth.totp.create", "auth.totp.advance", "auth.passkey.view", "auth.passkey.create", "identity.integration.view", "identity.integration.manage", "authz.integration.view", "authz.integration.manage", "ops.upstream_health.view", "ops.upstream_health.manage", "notification.center.view", "settings.app_setting.update"], securityCapabilities: { passwordChange: true, totpStatus: true, totpEnroll: true, totpDisable: true, passkeyList: true, passkeyRegister: true, passkeyDelete: true }, grants: [{ permissionCode: "authz.integration.view", dataScope: "ALL" }] });
     if (path === "/api/v1/notifications") return json({ items: [], unreadCount: 0, nextCursor: null });
+    // 「设置 → 通知」:分组已由后端按 gate 权限过滤,`canManage` 决定要不要画「平台配置」页签。
+    if (path === "/api/v1/notification-settings") return json({ canManage: true, channels: notificationChannels, groups: [notificationGroups.exam, notificationGroups.ops] });
+    if (path === "/api/v1/notification-settings/preferences") return json(notificationGroupAfter(JSON.parse(route.request().postData() ?? "{}") as Parameters<typeof notificationGroupAfter>[0]));
+    // 「平台配置」里所有分组都可改(托管开关能点、表格不置灰);PATCH 回的同样是整个分组。
+    if (path === "/api/v1/notification-settings/policy") {
+      if (route.request().method() !== "PATCH") return json({ channels: notificationChannels, groups: [notificationGroups.exam, notificationGroups.ops].map((group) => ({ ...group, editable: true })) });
+      const change = JSON.parse(route.request().postData() ?? "{}") as { group: string; managed?: boolean; scene?: string; channel?: string; enabled?: boolean };
+      if (typeof change.scene === "string") return json(notificationGroupAfter(change as Parameters<typeof notificationGroupAfter>[0]));
+      return json({ ...notificationGroups[change.group], managed: change.managed === true, editable: true });
+    }
     if (path === "/api/v1/users/me/totp/status") return json({ enabled: false });
     if (path === "/api/v1/users/me/passkeys") return json([]);
     if (path === "/api/v1/identity-integration/settings") return json({ enabled: false, issuer: "", authorizationEndpoint: "", tokenEndpoint: "", jwksUri: "", userinfoEndpoint: "", clientId: "", hasClientSecret: false, scopes: "openid profile email", redirectBaseUrl: "", redirectUri: "", frontendBaseUrl: "", serverBaseUrl: "" });
@@ -54,7 +95,7 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(page.locator('[data-test-id="app-footer-html"]')).toContainText(locale === "en" ? "Enterprise framework" : "企业框架");
     await expect(page.locator('[data-test-id="topbar-user-role"]')).toHaveText(locale === "en" ? "User" : "用户");
 
-    for (const [path, marker] of [["general", "general-settings-page"], ["appearance", "appearance-settings-page"], ["security", "enterprise-security-settings"], ["access", "enterprise-access-settings"], ["upstream", "upstream-health-page"]] as const) { await page.goto(`/${locale}/app/settings/${path}`); await expect(page.locator(`[data-test-id="${marker}"]`)).toBeVisible(); }
+    for (const [path, marker] of [["general", "general-settings-page"], ["appearance", "appearance-settings-page"], ["notifications", "notification-settings-surface"], ["security", "enterprise-security-settings"], ["access", "enterprise-access-settings"], ["upstream", "upstream-health-page"]] as const) { await page.goto(`/${locale}/app/settings/${path}`); await expect(page.locator(`[data-test-id="${marker}"]`)).toBeVisible(); }
     // 设置页只保留最内层标题，框架不再叠加「设置」大标题；「通用」排在设置菜单首位。
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/${locale}/app/settings/general`);
@@ -125,6 +166,41 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(exampleTable).toHaveClass(/ant-table-medium/);
     await page.goto(`/${locale}/app/settings/appearance`);
     await expect(page.locator('[data-test-id="appearance-density-toggle"] [data-density="comfortable"]')).toHaveAttribute("data-active", "true");
+  });
+  /**
+   * 「设置 → 通知」:任何登录用户都进得去(后端按 gate 权限过滤分组),托管分组只读,
+   * 开关即点即存,`loadPolicy` 只在真的切到「平台配置」时才发。
+   */
+  test("notification settings save on click and keep the managed group read-only", async ({ page }) => {
+    const policyCalls: string[] = [];
+    page.on("request", (request) => { if (new URL(request.url()).pathname === "/api/v1/notification-settings/policy") policyCalls.push(request.method()); });
+
+    await page.goto(`/${locale}/app/settings/notifications`);
+    await expect(page.locator('[data-test-id="notification-settings-surface"]')).toBeVisible();
+    await expect(page.locator("main h1")).toHaveCount(1);
+    await expect(page.locator("main h1")).toHaveText(locale === "en" ? "Notifications" : "通知");
+    await expect(page.locator('[data-test-id="notification-group-exam"]')).toBeVisible();
+    // 托管中的分组:标题行留着那枚静态标签与一枚恒为只读的开关(它是状态展示,不是操作入口)。
+    await expect(page.locator('[data-test-id="notification-group-ops-tag"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="notification-group-ops-managed"]')).toBeDisabled();
+    await expect(page.locator('[data-test-id="notification-group-exam-tag"]')).toHaveCount(0);
+    // 场景不支持的渠道画破折号,不画一个永远关着的开关。
+    await expect(page.locator('[data-test-id="notification-switch-exam.reminder-dingtalk"]')).toHaveCount(0);
+
+    // 即点即存:没有保存按钮,一次改动就是一个 PATCH /preferences,页面用返回的分组对齐。
+    const saved = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/v1/notification-settings/preferences" && request.method() === "PATCH");
+    const examSwitch = page.locator('[data-test-id="notification-switch-exam.result_released-dingtalk"]');
+    await examSwitch.click();
+    expect(JSON.parse((await saved).postData() ?? "{}")).toEqual({ group: "exam", scene: "exam.result_released", channel: "dingtalk", enabled: false });
+    await expect(examSwitch).toHaveAttribute("aria-checked", "false");
+
+    // 切页签之前一次都不读平台值;切过去才读,而且那一页里所有分组都能改。
+    expect(policyCalls).toEqual([]);
+    await page.locator('[data-test-id="notification-settings-tabs"] [data-notification-tab="policy"]').click();
+    await expect(page.locator('[data-test-id="notification-policy-description"]')).toBeVisible();
+    await expect.poll(() => policyCalls).toEqual(["GET"]);
+    await expect(page.locator('[data-test-id="notification-group-ops-managed"]')).toBeEnabled();
+    await expect(page.locator('[data-test-id="notification-group-ops-tag"]')).toHaveCount(0);
   });
   test("public login, logged-out and OIDC callback routes are reachable", async ({ page }) => {
     const response = await page.goto(`/${locale}/login`); await expect(page.locator('[data-test-id="enterprise-login-page"]')).toBeVisible(); await expect(page.locator("main")).toHaveCount(1);
@@ -214,6 +290,10 @@ for (const locale of locales) test.describe(`blank routes (${locale})`, () => {
     await expect(page.locator('[data-test-id="appearance-settings-page"]')).toBeVisible();
     await expect(page.locator('[data-test-id="permission-denied"]')).toHaveCount(0);
     await expect(page.locator('[data-test-id="appearance-global-section"]')).toHaveCount(0);
+    // 「通知」同样没有门禁:分组由后端按 gate 权限过滤,一个都没有时是空状态而不是 403。
+    await page.goto(`/${locale}/app/settings/notifications`);
+    await expect(page.locator('[data-test-id="notification-settings-surface"]')).toBeVisible();
+    await expect(page.locator('[data-test-id="permission-denied"]')).toHaveCount(0);
     await page.goto(`/${locale}/app/notifications`);
     await expect(page.locator('[data-test-id="permission-denied"]')).toBeVisible();
   });

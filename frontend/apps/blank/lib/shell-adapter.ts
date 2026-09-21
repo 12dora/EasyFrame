@@ -6,6 +6,12 @@ import {
   type EnterpriseGeneralSettingsValue,
   type EnterpriseIdentityKind,
   type EnterpriseIdentityLabels,
+  type NotificationGroupView,
+  type NotificationPolicyChange,
+  type NotificationPolicyView,
+  type NotificationSettingsAdapter,
+  type NotificationSettingsView,
+  type NotificationSwitchChange,
 } from "@easy-enterprise/ui/enterprise";
 import { DEFAULT_ROW_SPACING, type RowSpacing } from "@easy-enterprise/ui";
 import { DEFAULT_TABLE_DENSITY, type TableDensity } from "@easy-enterprise/ui/table";
@@ -234,3 +240,24 @@ export function saveGeneralSettings(value: ShellGeneralSettings) { return platfo
  * 保存成功后由 surface 自己调 `primeEnterpriseGeneralSettings`,顶栏品牌与页脚立即跟随,宿主不用再广播。
  */
 export const generalSettingsAdapter: EnterpriseGeneralSettingsAdapter = { load: loadGeneralSettings, save: saveGeneralSettings };
+
+/**
+ * 「设置 → 通知」的传输口(契约见 `packages/easy-enterprise/docs/NOTIFICATION-SETTINGS.md`)。
+ *
+ * 四个方法一一对应 `/api/v1/notification-settings` 的四个端点,走的是与
+ * `generalSettingsAdapter` 同一条 `platformRequest`(credentials、Bearer、401 口径都一样)。
+ *
+ * 两个 `save*` 直接把响应体交回去:后端返回的是**更新后的整个分组**,页面拿它替换乐观值。
+ *
+ * 409 不做任何包装:`platformRequest` 失败时抛的 `PlatformRequestError` 自带 `status`,
+ * 正好命中共享包的 `isNotificationManagedConflict`(它只认 `status === 409` 或
+ * `code === "notification_group_managed"`,不 `instanceof` 具体错误类),页面据此回滚并重读。
+ */
+export const notificationSettingsAdapter: NotificationSettingsAdapter = {
+  load: () => platformRequest<NotificationSettingsView>("/api/v1/notification-settings"),
+  savePreference: (change: NotificationSwitchChange) =>
+    platformRequest<NotificationGroupView>("/api/v1/notification-settings/preferences", { method: "PATCH", body: JSON.stringify(change) }),
+  loadPolicy: () => platformRequest<NotificationPolicyView>("/api/v1/notification-settings/policy"),
+  savePolicy: (change: NotificationPolicyChange) =>
+    platformRequest<NotificationGroupView>("/api/v1/notification-settings/policy", { method: "PATCH", body: JSON.stringify(change) }),
+};
