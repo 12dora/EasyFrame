@@ -163,3 +163,58 @@ def test_routes_absent_when_ports_not_provided() -> None:
     assert client.get(PREFIX).status_code == 404
     assert client.get(f"{PREFIX}/policy").status_code == 404
     assert client.patch(f"{PREFIX}/preferences", json=preference_body(enabled=False)).status_code == 404
+    assert client.get(f"{PREFIX}/channels/dingtalk").status_code == 404
+
+
+def test_dingtalk_channel_forbidden_without_manage_permission() -> None:
+    client = make_settings_client(user=settings_user(LEARNER_GATE))
+    path = f"{PREFIX}/channels/dingtalk"
+    assert client.get(path).status_code == 403
+    assert client.put(path, json={"baseUrl": "https://easyauth.example.test"}).status_code == 403
+    assert client.post(f"{path}/test").status_code == 403
+
+
+def test_dingtalk_channel_get_put_hides_credential() -> None:
+    secret = "eat_notify_secret_value"
+    client = make_settings_client(user=settings_user(NOTIFICATION_SETTINGS_MANAGE))
+    path = f"{PREFIX}/channels/dingtalk"
+    loaded = client.get(path)
+    assert loaded.status_code == 200, loaded.text
+    body = loaded.json()
+    assert body["hasCredential"] is False
+    assert body["credentialSource"] == "none"
+    assert "credential" not in body
+    saved = client.put(
+        path,
+        json={"baseUrl": "https://easyauth.example.test", "appKey": "enterprise-blank", "credential": secret},
+    )
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["baseUrl"] == "https://easyauth.example.test"
+    assert body["appKey"] == "enterprise-blank"
+    assert body["hasCredential"] is True
+    assert body["credentialSource"] == "settings"
+    assert "credential" not in body
+    assert secret not in saved.text
+
+
+def test_dingtalk_channel_test_uses_port() -> None:
+    client = make_settings_client(user=settings_user(NOTIFICATION_SETTINGS_MANAGE))
+    response = client.post(f"{PREFIX}/channels/dingtalk/test")
+    assert response.status_code == 200, response.text
+    assert response.json()["ok"] is True
+    assert response.json()["latencyMs"] == 12
+
+
+def test_dingtalk_channel_rejects_invalid_base_url() -> None:
+    client = make_settings_client(user=settings_user(NOTIFICATION_SETTINGS_MANAGE))
+    response = client.put(f"{PREFIX}/channels/dingtalk", json={"baseUrl": "not-a-url"})
+    assert response.status_code == 422
+
+
+def test_dingtalk_channel_put_omits_secret_from_422() -> None:
+    secret = "s" * 4001
+    client = make_settings_client(user=settings_user(NOTIFICATION_SETTINGS_MANAGE))
+    response = client.put(f"{PREFIX}/channels/dingtalk", json={"credential": secret})
+    assert response.status_code == 422
+    assert secret not in response.text

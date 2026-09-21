@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,6 +12,8 @@ from enterprise_platform.assembly import PlatformPorts, PlatformRouteGroups, cre
 from enterprise_platform.notification_settings import (
     CHANNEL_IN_APP,
     NOTIFICATION_CHANNELS,
+    DingtalkChannelSettings,
+    DingtalkChannelSettingsUpdate,
     LocalizedText,
     NotificationCatalog,
     NotificationGroup,
@@ -21,7 +24,7 @@ from enterprise_platform.notification_settings import (
     SwitchChange,
     Switches,
 )
-from enterprise_platform.schemas import CurrentUser
+from enterprise_platform.schemas import ConnectionTestResult, CurrentUser
 
 LEARNER_GATE = "exam.learner.view"
 TEACHER_GATE = "exam.teacher.view"
@@ -91,6 +94,18 @@ class MemoryNotificationSettings:
         self.policy_loads = 0
         self.preference_loads: list[tuple[tuple[str, ...], str]] = []
         self.before_save_preference: Callable[[], None] | None = None
+        self.dingtalk = DingtalkChannelSettings(
+            base_url="",
+            app_key="",
+            base_url_inherited=False,
+            app_key_inherited=False,
+            has_credential=False,
+            credential_source="none",
+            configured=True,
+            updated_at=None,
+        )
+        self.dingtalk_secret = ""
+        self.dingtalk_test = ConnectionTestResult(ok=True, latency_ms=12)
 
     def load_policies(self) -> dict[str, NotificationGroupPolicy]:
         self.policy_loads += 1
@@ -130,6 +145,34 @@ class MemoryNotificationSettings:
 
     def channel_available(self, channel: str) -> bool:
         return channel not in self.unavailable and channel in NOTIFICATION_CHANNELS
+
+    def load_dingtalk_channel(self) -> DingtalkChannelSettings:
+        return self.dingtalk
+
+    def save_dingtalk_channel(
+        self, payload: DingtalkChannelSettingsUpdate, *, actor_id: str
+    ) -> DingtalkChannelSettings:
+        del actor_id
+        updates: dict[str, object] = {
+            "configured": self.channel_available("dingtalk"),
+            "updated_at": datetime.now(UTC),
+        }
+        if payload.base_url is not None:
+            updates["base_url"] = payload.base_url
+            updates["base_url_inherited"] = payload.base_url == ""
+        if payload.app_key is not None:
+            updates["app_key"] = payload.app_key
+            updates["app_key_inherited"] = payload.app_key == ""
+        incoming = payload.plain_credential()
+        if incoming is not None:
+            self.dingtalk_secret = incoming
+            updates["has_credential"] = bool(incoming)
+            updates["credential_source"] = "settings" if incoming else "none"
+        self.dingtalk = self.dingtalk.model_copy(update=updates)
+        return self.dingtalk
+
+    def test_dingtalk_channel(self) -> ConnectionTestResult:
+        return self.dingtalk_test
 
 
 class _UserPort:

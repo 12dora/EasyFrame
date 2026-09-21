@@ -30,6 +30,7 @@ from enterprise_platform.easyauth.notify import (
     NotifyRequest,
     NotifySendResult,
 )
+from enterprise_platform.easyauth.notify_probe import PROBE_MESSAGE_ID, probe_notify_credential
 from enterprise_platform.easyauth.types import (
     DirectoryAccessError,
     DirectorySnapshotDriftError,
@@ -76,12 +77,14 @@ __all__ = [
     "NotifyThrottledError",
     "NotifyUnavailableError",
     "OAUTH_CLIENT_CREDENTIALS",
+    "PROBE_MESSAGE_ID",
     "STATIC_APP_TOKEN",
     "CATALOG_CHANGED_EVENT",
     "GRANT_CHANGED_EVENT",
     "WEBHOOK_TEST_EVENT",
     "WebhookEvent",
     "WebhookVerificationError",
+    "probe_notify_credential",
     "resolve_bearer_token",
     "verify_webhook",
 ]

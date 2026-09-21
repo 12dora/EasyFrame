@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Literal, Protocol
+from collections.abc import Callable, Sequence
+from datetime import datetime
+from typing import Annotated, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, WrapValidator, field_validator, model_validator
 
-from enterprise_platform.schemas import PlatformModel, StrictPlatformModel
+from enterprise_platform.schemas import ConnectionTestResult, PlatformModel, StrictPlatformModel
 
 CHANNEL_DINGTALK = "dingtalk"
 CHANNEL_IN_APP = "in_app"
@@ -105,6 +106,11 @@ class NotificationSettingsPort(Protocol):
         ...
 
     def channel_available(self, channel: str) -> bool: ...
+    def load_dingtalk_channel(self) -> DingtalkChannelSettings: ...
+    def save_dingtalk_channel(
+        self, payload: DingtalkChannelSettingsUpdate, *, actor_id: str
+    ) -> DingtalkChannelSettings: ...
+    def test_dingtalk_channel(self) -> ConnectionTestResult: ...
 
 
 class UnknownNotificationTargetError(ValueError):
@@ -178,6 +184,49 @@ class NotificationPolicyPatch(StrictPlatformModel):
         if self.scene is not None and self.channel is not None and self.enabled is not None:
             switch = SwitchChange(scene=self.scene, channel=self.channel, enabled=self.enabled)
         return PolicyChange(managed=self.managed, switch=switch)
+
+
+class DingtalkChannelSettings(PlatformModel):
+    base_url: str
+    app_key: str
+    base_url_inherited: bool
+    app_key_inherited: bool
+    has_credential: bool
+    credential_source: Literal["settings", "env", "none"]
+    configured: bool
+    updated_at: datetime | None = None
+
+
+def _as_optional_secret(value: object, handler: Callable[[object], object]) -> object:
+    if isinstance(value, str):
+        return handler(SecretStr(value.strip()))
+    return handler(value)
+
+
+class DingtalkChannelSettingsUpdate(PlatformModel):
+    base_url: str | None = Field(default=None, max_length=500)
+    app_key: str | None = Field(default=None, max_length=100)
+    # 先包成 SecretStr 再做长度校验,422 的 input 只会是 ********** 而不是明文。
+    credential: Annotated[SecretStr | None, WrapValidator(_as_optional_secret)] = Field(default=None, max_length=4000)
+
+    @field_validator("base_url", "app_key", mode="before")
+    @classmethod
+    def strip_optional_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str | None) -> str | None:
+        if not value:
+            return value
+        from enterprise_platform.urls import validate_endpoint_url
+
+        return validate_endpoint_url(value)
+
+    def plain_credential(self) -> str | None:
+        if self.credential is None:
+            return None
+        return self.credential.get_secret_value()
 
 
 def effective_enabled(

@@ -159,6 +159,7 @@ BlankNotificationAdapter = adapter_platform.BlankNotificationAdapter
 BlankNotificationSettingsAdapter = adapter_notification_settings.BlankNotificationSettingsAdapter
 BlankUpstreamHealthAdapter = adapter_platform.BlankUpstreamHealthAdapter
 notification_settings_adapter = adapter_notification_settings.notification_settings_adapter
+probe_dingtalk_notify = adapter_notification_settings.probe_dingtalk_notify
 _as_utc = adapter_platform._as_utc
 _decode_notification_cursor = adapter_platform._decode_notification_cursor
 _encode_notification_cursor = adapter_platform._encode_notification_cursor
@@ -269,6 +270,7 @@ __all__ = [
     "normalize_local_grants",
     "normalize_oidc_settings",
     "notification_settings_adapter",
+    "probe_dingtalk_notify",
     "oidc_client_authority",
     "or_",
     "os",

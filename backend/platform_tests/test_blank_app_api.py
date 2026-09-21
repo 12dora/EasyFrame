@@ -150,12 +150,8 @@ def test_blank_backend_login_and_platform_contracts(monkeypatch) -> None:
 
         upstream = client.get("/api/v1/ops/upstream-health", headers=headers)
         assert upstream.status_code == 200
-        assert {item["dependency"] for item in upstream.json()} == {
-            "authentik",
-            "easyauth_directory",
-            "easyauth",
-            "scheduler",
-        }
+        expected = {"authentik", "easyauth_directory", "easyauth", "dingtalk_notify", "scheduler"}
+        assert {item["dependency"] for item in upstream.json()} == expected
         items = {item["dependency"]: item for item in upstream.json()}
         assert items["easyauth_directory"]["supported"] is True
         unsupported = {item["dependency"] for item in upstream.json() if item["supported"] is False}

@@ -482,6 +482,7 @@ class BlankUpstreamHealthAdapter:
         "authentik": ("Authentik(SSO 登录)", True, lambda: _facade().BlankIntegrationAdapter().test_oidc()),
         "easyauth_directory": ("EasyAuth(用户目录)", True, lambda: _facade().BlankDirectoryAdapter().test_directory()),
         "easyauth": ("EasyAuth(权限授权)", True, lambda: _facade().BlankIntegrationAdapter().test_easyauth()),
+        "dingtalk_notify": ("通知服务（钉钉）", True, lambda: _facade().probe_dingtalk_notify()),
         "scheduler": ("定时任务调度器", False, None),
     }
 
@@ -526,9 +527,7 @@ class BlankUpstreamHealthAdapter:
                     _facade().HealthSnapshot(
                         dependency=dependency,
                         display_name=display_name,
-                        status="healthy"
-                        if result.ok
-                        else ("unknown" if result.error_kind in {"not_configured", "not_supported"} else "unhealthy"),
+                        status=_health_status_for(result, dependency),
                         summary=(
                             "连接正常"
                             if result.ok
@@ -541,13 +540,23 @@ class BlankUpstreamHealthAdapter:
         return self.latest()
 
 
+def _health_status_for(result: ConnectionTestResult, dependency: str) -> str:
+    if result.ok:
+        return "healthy"
+    if result.error_kind == "not_configured" and dependency == "dingtalk_notify":
+        return "warning"
+    if result.error_kind in {"not_configured", "not_supported"}:
+        return "unknown"
+    return "unhealthy"
+
+
 def _health_summary_code(status: str, summary: str) -> str:
     if "不支持" in summary:
         return "upstream.not_supported"
     if status == "healthy":
         return "upstream.healthy"
     if status == "warning":
-        return "upstream.warning"
+        return "upstream.not_configured" if "not_configured" in summary else "upstream.warning"
     if status == "unhealthy":
         return "upstream.unhealthy"
     return "upstream.unknown"

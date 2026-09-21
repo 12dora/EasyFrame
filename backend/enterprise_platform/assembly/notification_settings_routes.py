@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from enterprise_platform.assembly.contracts import NOTIFICATION_SETTINGS_MANAGE
 from enterprise_platform.assembly.dependencies import AssemblyDependencies
 from enterprise_platform.notification_settings import (
+    DingtalkChannelSettings,
+    DingtalkChannelSettingsUpdate,
     NotificationCatalog,
     NotificationGroup,
     NotificationGroupManagedError,
@@ -28,7 +30,7 @@ from enterprise_platform.notification_settings import (
     build_policy_settings,
     validate_change,
 )
-from enterprise_platform.schemas import CurrentUser
+from enterprise_platform.schemas import ConnectionTestResult, CurrentUser
 
 _MANAGED = {"code": "notification_group_managed"}
 _NOT_FOUND = "通知设置不存在"
@@ -40,6 +42,9 @@ def register_notification_settings_routes(router: APIRouter, ctx: AssemblyDepend
     _register_patch_preferences(router, ctx)
     _register_get_policy(router, ctx)
     _register_patch_policy(router, ctx)
+    _register_get_dingtalk(router, ctx)
+    _register_put_dingtalk(router, ctx)
+    _register_test_dingtalk(router, ctx)
 
 
 def _register_get_mine(router: APIRouter, ctx: AssemblyDependencies) -> None:
@@ -135,6 +140,47 @@ def _patch_policy(ctx: AssemblyDependencies, body: NotificationPolicyPatch, user
     return build_group_view(group, policy, None, mode="policy")
 
 
+def _register_get_dingtalk(router: APIRouter, ctx: AssemblyDependencies) -> None:
+    @router.get(
+        "/notification-settings/channels/dingtalk",
+        response_model=DingtalkChannelSettings,
+        tags=["notification-settings"],
+    )
+    def get_dingtalk(
+        _user: CurrentUser = Depends(ctx.current_user),
+        _permission: Any = Depends(ctx.permission_for(NOTIFICATION_SETTINGS_MANAGE)),
+    ) -> DingtalkChannelSettings:
+        return ctx.port_call(_dingtalk_port(ctx).load_dingtalk_channel)
+
+
+def _register_put_dingtalk(router: APIRouter, ctx: AssemblyDependencies) -> None:
+    @router.put(
+        "/notification-settings/channels/dingtalk",
+        response_model=DingtalkChannelSettings,
+        tags=["notification-settings"],
+    )
+    def put_dingtalk(
+        body: DingtalkChannelSettingsUpdate,
+        user: CurrentUser = Depends(ctx.current_user),
+        _permission: Any = Depends(ctx.permission_for(NOTIFICATION_SETTINGS_MANAGE)),
+    ) -> DingtalkChannelSettings:
+        port = _dingtalk_port(ctx)
+        return ctx.port_call(lambda: port.save_dingtalk_channel(body, actor_id=user.id))
+
+
+def _register_test_dingtalk(router: APIRouter, ctx: AssemblyDependencies) -> None:
+    @router.post(
+        "/notification-settings/channels/dingtalk/test",
+        response_model=ConnectionTestResult,
+        tags=["notification-settings"],
+    )
+    def test_dingtalk(
+        _user: CurrentUser = Depends(ctx.current_user),
+        _permission: Any = Depends(ctx.permission_for(NOTIFICATION_SETTINGS_MANAGE)),
+    ) -> ConnectionTestResult:
+        return ctx.port_call(_dingtalk_port(ctx).test_dingtalk_channel)
+
+
 def _validated_policy_change(
     catalog: NotificationCatalog, group: NotificationGroup, body: NotificationPolicyPatch
 ) -> PolicyChange:
@@ -150,6 +196,10 @@ def _bound_ports(ctx: AssemblyDependencies) -> tuple[NotificationCatalog, Notifi
     if catalog is None or settings is None:
         raise HTTPException(404, _NOT_FOUND)
     return catalog, settings
+
+
+def _dingtalk_port(ctx: AssemblyDependencies) -> NotificationSettingsPort:
+    return _bound_ports(ctx)[1]
 
 
 def _require_group(catalog: NotificationCatalog, group_key: str) -> NotificationGroup:
