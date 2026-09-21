@@ -112,7 +112,7 @@ make blank-e2e                         # = pnpm --dir frontend blank:e2e(Playwri
 - [docs/SHELL_PERCEIVED_LOADING.md](docs/SHELL_PERCEIVED_LOADING.md) — 外壳身份的感知加载（只等 `/auth/me`、本标签页快照、空闲复查）与宿主接入清单
 - [docs/SHELL_MOBILE.md](docs/SHELL_MOBILE.md) — 外壳的手机形态（一条头部栏、页脚传两遍、列表换卡片）与宿主镜像清单
 - [docs/TABLE_DENSITY.md](docs/TABLE_DENSITY.md) — 表格密度（紧凑/宽松，按账号保存）的线合同、外壳接线与宿主镜像清单
-- [docs/NOTIFICATION_SETTINGS.md](docs/NOTIFICATION_SETTINGS.md) — 通知设置框架（场景声明、平台托管、个人偏好、发送判定）
+- [docs/NOTIFICATION_SETTINGS.md](docs/NOTIFICATION_SETTINGS.md) — 通知设置框架（场景声明、平台托管、个人偏好、发送判定）；blank 参考实现与设置页见该文 §7
 
 ## 许可
 

@@ -70,9 +70,12 @@ class NotificationSettingsPort(Protocol):
 
 class SwitchChange(BaseModel):  scene: str; channel: str; enabled: bool
 class PolicyChange(BaseModel):  managed: bool | None = None; switch: SwitchChange | None = None   # 至少一项
+class NotificationGroupManagedError(Exception):  # 携带 group_key
 ```
 
-`save_*` 必须在同一事务内对目标行加锁(`SELECT ... FOR UPDATE`,缺行先插入)后读改写,只改补丁携带的那一个开关;并写审计 `notification.policy.update` / `notification.preferences.update`(before/after)。
+`save_policy` 必须在同一事务内对策略行加锁(`SELECT ... FOR UPDATE`,缺行先插入)后读改写,只改补丁携带的字段;写审计 `notification.policy.update`(before/after)。
+
+`save_preference` 必须在同一事务内先对**该分组策略行**加同样的行锁(缺行先插入),托管则抛 `NotificationGroupManagedError`(携带 `group_key`)且不得写偏好;否则再锁偏好行并只改补丁携带的那一个开关,写审计 `notification.preferences.update`(before/after)。HTTP 层可做托管预检,但不得只靠预检。
 
 `PlatformPorts.notification_settings: NotificationSettingsPort | None = None`,`notification_catalog: NotificationCatalog | None = None`;二者任缺其一则不注册路由(老宿主不受影响)。
 
@@ -106,7 +109,7 @@ class PolicyChange(BaseModel):  managed: bool | None = None; switch: SwitchChang
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
 | GET | `` | 登录 | `{canManage, channels:[{key, available}], groups:[…]}`。仅含当前用户持有 `gate_permission` 的分组;开关为**本人生效值**;`editable = !managed` |
-| PATCH | `/preferences` | 登录 + 分组 gate | 体 `{group, scene, channel, enabled}` → 更新后的分组对象。托管中 → HTTP 409,FastAPI 信封 `{"detail": {"code": "notification_group_managed"}}`(与其它内核编码错误相同,`code` 在 `detail` 里);未知分组/场景/渠道 → 404;无 gate → 403 |
+| PATCH | `/preferences` | 登录 + 分组 gate | 体 `{group, scene, channel, enabled}` → 更新后的分组对象。托管中(含预检通过后、写入前策略被改为托管,端口抛 `NotificationGroupManagedError`) → HTTP 409,FastAPI 信封 `{"detail": {"code": "notification_group_managed"}}`(与其它内核编码错误相同,`code` 在 `detail` 里);未知分组/场景/渠道 → 404;无 gate → 403 |
 | GET | `/policy` | `notification.settings.manage` | `{channels, groups}`:全部分组,开关为**平台值**,`editable = true` |
 | PATCH | `/policy` | `notification.settings.manage` | 体 `{group, managed?, scene?, channel?, enabled?}`(`managed` 与开关三元组至少给一项)→ 更新后的分组对象 |
 
@@ -130,7 +133,7 @@ def plan_delivery(catalog, settings: NotificationSettingsPort, scene_key: str,
                   recipients: Sequence[NotificationRecipient]) -> DeliveryPlan
 ```
 
-未声明的 `scene_key` 抛 `UnknownNotificationSceneError`(编程错误,不静默吞)。宿主拿到计划后:站内通知与业务写入同事务;钉钉一律在事务 / advisory lock 之外发送,失败不回滚业务。
+渠道输出按出现顺序去重:站内通知(`in_app`)按 `account_id`,钉钉(`dingtalk`)按 `ref`;同一身份只保留第一次。未声明的 `scene_key` 抛 `UnknownNotificationSceneError`(编程错误,不静默吞)。宿主拿到计划后:站内通知与业务写入同事务;钉钉一律在事务 / advisory lock 之外发送,失败不回滚业务。
 
 ## 6. 前端(EasyUI)
 
@@ -156,3 +159,13 @@ interface NotificationSettingsAdapter {
 2. 建两张表(Alembic),实现 `NotificationSettingsPort`,装入 `PlatformPorts`。
 3. 业务事件处调用 `plan_delivery`,按计划写站内通知 / 发钉钉。
 4. 前端新增 `settings/notifications` 页面挂载 EasyUI surface,设置导航增加「通知」,`routes.spec` 补中英文路由。
+
+blank 是参考实现(目录只供设置页演示,不接线真实发送):
+
+| 步骤 | blank 指针 |
+|---|---|
+| 目录 | `backend/blank_app/notification_catalog.py` |
+| 权限 | `backend/blank_app/permission_registry.py`(`notification.settings.manage`,与 `notification.center.view` 并列;显示名在 `authz_snapshot.seed_platform_catalog`) |
+| 表 | `backend/blank_app/models.py` 的 `PlatformNotificationPolicy` / `PlatformNotificationPreference`;迁移 `backend/blank_app/alembic/versions/0007_notification_settings.py` |
+| 端口 | `backend/blank_app/adapter_notification_settings.py`,经 `adapters.py` 装入 `backend/blank_app/main.py` 的 `PlatformPorts` |
+| 设置页 | `frontend/apps/blank/app/[locale]/app/settings/notifications/page.tsx`(外壳导航「通知」) |

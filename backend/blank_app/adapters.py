@@ -4,6 +4,7 @@
 - ``adapter_support``: 密钥/签名/设置/审计/本地资格
 - ``adapter_account``: 账号端口、本地账户管理、权限投影
 - ``adapter_platform``: 通用设置、通知、身份集成、上游健康
+- ``adapter_notification_settings``: 通知设置策略与个人偏好
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from passlib.context import CryptContext
 from sqlalchemy import and_, delete, func, or_, update
 from sqlalchemy.exc import IntegrityError
 
-from blank_app import adapter_account, adapter_platform, adapter_support, authz_snapshot
+from blank_app import adapter_account, adapter_notification_settings, adapter_platform, adapter_support, authz_snapshot
 from blank_app.database import SessionLocal
 from blank_app.models import (
     Account,
@@ -155,7 +156,9 @@ BlankDirectoryAdapter = adapter_platform.BlankDirectoryAdapter
 BlankAppSettingsAdapter = adapter_platform.BlankAppSettingsAdapter
 BlankIntegrationAdapter = adapter_platform.BlankIntegrationAdapter
 BlankNotificationAdapter = adapter_platform.BlankNotificationAdapter
+BlankNotificationSettingsAdapter = adapter_notification_settings.BlankNotificationSettingsAdapter
 BlankUpstreamHealthAdapter = adapter_platform.BlankUpstreamHealthAdapter
+notification_settings_adapter = adapter_notification_settings.notification_settings_adapter
 _as_utc = adapter_platform._as_utc
 _decode_notification_cursor = adapter_platform._decode_notification_cursor
 _encode_notification_cursor = adapter_platform._encode_notification_cursor
@@ -177,6 +180,7 @@ __all__ = [
     "BlankLocalAccountAdmin",
     "BlankLocalAccountUnitOfWork",
     "BlankNotificationAdapter",
+    "BlankNotificationSettingsAdapter",
     "BlankUpstreamHealthAdapter",
     "CatalogPermission",
     "ConnectionTestResult",
@@ -264,6 +268,7 @@ __all__ = [
     "normalize_grants",
     "normalize_local_grants",
     "normalize_oidc_settings",
+    "notification_settings_adapter",
     "oidc_client_authority",
     "or_",
     "os",

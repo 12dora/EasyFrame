@@ -39,7 +39,7 @@ blank_app 经 `create_platform_router` 自动挂载，无需再写一条宿主�
 ### 前端模板（`frontend/apps/blank`）
 
 - 升 EasyUI 到含 `EnterprisePermissionOnboarding` / `hasEnterpriseBusinessAccess` 的提交。
-- `lib/permissions.ts` — 把**带门禁的导航与设置面板**权限码列成 `BLANK_BUSINESS_PERMISSION_CODES`（空白站：`identity.integration.view`、`authz.integration.view`、`accounts.local.view`、`ops.upstream_health.view`、`settings.app_setting.update`）。通知中心不要列入。
+- `lib/permissions.ts` — 把**带门禁的导航与设置面板**权限码列成 `BLANK_BUSINESS_PERMISSION_CODES`（空白站：`identity.integration.view`、`authz.integration.view`、`accounts.local.view`、`ops.upstream_health.view`、`settings.app_setting.update`）。通知中心不要列入。`notification.settings.manage` 已登记在 blank `permission_registry`（与 `notification.center.view` 并列），同样不要列入本名单。
 - `lib/shell-adapter.ts` — `loadAuthSession()` → `GET /api/v1/auth/session`，落地成 `ShellSession { permissionRequestUrl, tableDensity, rowSpacing }`；失败/超时/`""` 一律回缺省（无入口 + 紧凑），且 `preserveSessionOn401`（会话对错只由 `/auth/me` 裁决）。外壳走 `startShellIdentityLoad()`：两条请求同 tick 发出，只 `await` `/auth/me`，申请入口与偏好后台补（见 [SHELL_PERCEIVED_LOADING.md](SHELL_PERCEIVED_LOADING.md)）。
 - 两项偏好的接线（外壳上的 `TableDensityProvider` / `RowSpacingProvider`、设置 → 外观、`PATCH /auth/preferences` 的乐观写回）见 [TABLE_DENSITY.md](TABLE_DENSITY.md)，本文只管申请入口。
 - `components/blank-shell.tsx` — 身份加载完成后，强制改密页仍优先；否则当 `!hasEnterpriseBusinessAccess({ permissions, securityCapabilities, isLocalSuperadmin, businessPermissionCodes: BLANK_BUSINESS_PERMISSION_CODES })` 时，**整页渲染 `EnterprisePermissionOnboarding`，不要放进 `EnterpriseAppFrame`**。`businessPermissionCodes` 必填。`/auth/session` 与 `/auth/me` 同 tick 发出但不阻塞外壳；**只有引导页**在 `onboardingReady(identity, permissionUrlPending)` 为假时继续画骨架屏，避免申请链接在首屏之后才出现。

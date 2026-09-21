@@ -15,6 +15,7 @@ from blank_app.adapters import (
     account_adapter,
     authorize_security_operation,
     local_account_admin,
+    notification_settings_adapter,
     record_login_audit,
     record_platform_audit,
     request_principal_account_id,
@@ -33,6 +34,7 @@ from blank_app.authz_api import (
 from blank_app.authz_api import router as authz_router
 from blank_app.authz_hotpath import shutdown_background_refresh
 from blank_app.database import SessionLocal
+from blank_app.notification_catalog import notification_catalog
 from blank_app.oidc_adapter import BlankOidcHost
 from enterprise_platform import PlatformPorts, PlatformSecurityHooks, create_platform_router
 from enterprise_platform.auth import AuthError
@@ -121,6 +123,8 @@ ports = PlatformPorts(
     upstream_health=BlankUpstreamHealthAdapter(),
     require_permission=require_permission,
     authorization=BlankAuthorizationOperations(),
+    notification_settings=notification_settings_adapter,
+    notification_catalog=notification_catalog,
 )
 
 

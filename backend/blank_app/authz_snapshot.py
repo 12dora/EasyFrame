@@ -59,6 +59,8 @@ def seed_platform_catalog() -> None:
         "auth.passkey.create": ("管理通行密钥", "Manage passkeys"),
         "accounts.local.view": ("查看本地账户", "View local accounts"),
         "accounts.local.manage": ("管理本地账户", "Manage local accounts"),
+        "notification.center.view": ("查看通知中心", "View notification center"),
+        "notification.settings.manage": ("管理通知设置", "Manage notification settings"),
     }
     with _facade().SessionLocal() as db:
         _upsert_catalog_rows(db, names)

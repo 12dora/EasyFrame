@@ -1,5 +1,6 @@
 """blank host 权限注册表。"""
 
+from enterprise_platform.assembly.contracts import NOTIFICATION_CENTER_VIEW, NOTIFICATION_SETTINGS_MANAGE
 from enterprise_platform.authz import DataScope, PermissionRegistration
 
 FRAMEWORK_PERMISSIONS = (
@@ -32,11 +33,18 @@ FRAMEWORK_PERMISSIONS = (
         risk_level="high",
     ),
     PermissionRegistration(
-        code="notification.center.view",
+        code=NOTIFICATION_CENTER_VIEW,
         domain="notification",
         resource="notification.center",
         supported_scopes=[DataScope.SELF],
         risk_level="standard",
+    ),
+    PermissionRegistration(
+        code=NOTIFICATION_SETTINGS_MANAGE,
+        domain="notification",
+        resource="notification.settings",
+        supported_scopes=[DataScope.ALL],
+        risk_level="high",
     ),
     *(
         PermissionRegistration(

@@ -170,3 +170,28 @@ class PermissionSnapshot(BlankBase):
     __table_args__ = (
         UniqueConstraint("external_source", "external_user_id", "app_key", name="uq_platform_permission_snapshot"),
     )
+
+
+class PlatformNotificationPolicy(BlankBase):
+    __tablename__ = "platform_notification_policies"
+
+    group_key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    managed: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    switches: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    updated_by: Mapped[str | None] = mapped_column(String(100))
+
+
+class PlatformNotificationPreference(BlankBase):
+    __tablename__ = "platform_notification_preferences"
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("platform_accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    group_key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    switches: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
