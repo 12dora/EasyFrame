@@ -35,7 +35,7 @@ def test_plan_delivery_batches_preference_loads_when_unmanaged() -> None:
     plan = plan_delivery(sample_catalog(), settings, SCENE_RESULT, recipients)
     assert settings.policy_loads == 1
     assert settings.preference_loads == [(("a1", "a2"), "learner")]
-    assert [item.ref for item in plan.in_app] == ["r1", "r2", "r4"]
+    assert [item.ref for item in plan.in_app] == ["r1", "r2"]
     assert [item.ref for item in plan.dingtalk] == ["r1", "r2", "r3", "r4"]
 
 
@@ -62,3 +62,32 @@ def test_plan_delivery_uses_unmanaged_preferences() -> None:
     assert settings.preference_loads == [(("a1", "a2"), "learner")]
     assert [item.ref for item in plan.in_app] == ["r2"]
     assert [item.ref for item in plan.dingtalk] == ["r1", "r2"]
+
+
+def test_plan_delivery_dedupes_in_app_by_account_id_preserving_order() -> None:
+    settings = MemoryNotificationSettings()
+    settings.policies["learner"] = NotificationGroupPolicy(managed=False)
+    recipients = (
+        NotificationRecipient(ref="r1", account_id="a1"),
+        NotificationRecipient(ref="r2", account_id="a2"),
+        NotificationRecipient(ref="r3", account_id="a1"),
+        NotificationRecipient(ref="r4", account_id="a3"),
+    )
+    plan = plan_delivery(sample_catalog(), settings, SCENE_RESULT, recipients)
+    assert [item.ref for item in plan.in_app] == ["r1", "r2", "r4"]
+    assert [item.account_id for item in plan.in_app] == ["a1", "a2", "a3"]
+    assert [item.ref for item in plan.dingtalk] == ["r1", "r2", "r3", "r4"]
+
+
+def test_plan_delivery_dedupes_dingtalk_by_ref_preserving_order() -> None:
+    settings = MemoryNotificationSettings()
+    recipients = (
+        NotificationRecipient(ref="r1", account_id="a1"),
+        NotificationRecipient(ref="r1", account_id="a2"),
+        NotificationRecipient(ref="r2", account_id=None),
+        NotificationRecipient(ref="r3", account_id="a3"),
+        NotificationRecipient(ref="r2", account_id="a4"),
+    )
+    plan = plan_delivery(sample_catalog(), settings, SCENE_RESULT, recipients)
+    assert [item.ref for item in plan.dingtalk] == ["r1", "r2", "r3"]
+    assert [item.account_id for item in plan.in_app] == ["a1", "a2", "a3", "a4"]

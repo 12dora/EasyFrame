@@ -12,6 +12,7 @@ from enterprise_platform.notification_settings import (
     LocalizedText,
     NotificationCatalog,
     NotificationGroup,
+    NotificationGroupManagedError,
     NotificationGroupPolicy,
     NotificationScene,
     PolicyChange,
@@ -25,6 +26,7 @@ from platform_tests.notification_settings_fakes import (
     LEARNER_GATE,
     SCENE_REMINDER,
     SCENE_RESULT,
+    MemoryNotificationSettings,
     loc,
     sample_catalog,
 )
@@ -132,6 +134,15 @@ def test_policy_change_requires_managed_or_switch() -> None:
         PolicyChange()
     PolicyChange(managed=False)
     PolicyChange(switch=SwitchChange(scene=SCENE_RESULT, channel=CHANNEL_IN_APP, enabled=True))
+
+
+def test_save_preference_rejects_managed_group() -> None:
+    settings = MemoryNotificationSettings()
+    change = SwitchChange(scene=SCENE_RESULT, channel=CHANNEL_IN_APP, enabled=False)
+    with pytest.raises(NotificationGroupManagedError) as captured:
+        settings.save_preference("user-1", "learner", change)
+    assert captured.value.group_key == "learner"
+    assert ("user-1", "learner") not in settings.preferences
 
 
 def test_group_view_my_and_policy_modes() -> None:

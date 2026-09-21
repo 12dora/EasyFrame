@@ -82,6 +82,15 @@ def _unique_account_ids(recipients: Sequence[NotificationRecipient]) -> list[str
     return ids
 
 
+def _dedupe_channel(recipients: Sequence[NotificationRecipient], channel: str) -> tuple[NotificationRecipient, ...]:
+    unique: dict[str, NotificationRecipient] = {}
+    for recipient in recipients:
+        identity = recipient.account_id if channel == CHANNEL_IN_APP else recipient.ref
+        if identity is not None and identity not in unique:
+            unique[identity] = recipient
+    return tuple(unique.values())
+
+
 def _planned(
     scene: NotificationScene,
     channel: str,
@@ -93,11 +102,12 @@ def _planned(
 ) -> tuple[NotificationRecipient, ...]:
     if channel not in scene.channels:
         return ()
-    return tuple(
+    selected = [
         recipient
         for recipient in recipients
         if _recipient_enabled(scene, channel, policy, prefs, recipient, require_account=require_account)
-    )
+    ]
+    return _dedupe_channel(selected, channel)
 
 
 def _recipient_enabled(

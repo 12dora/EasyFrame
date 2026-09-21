@@ -11,6 +11,7 @@ from enterprise_platform.assembly.dependencies import AssemblyDependencies
 from enterprise_platform.notification_settings import (
     NotificationCatalog,
     NotificationGroup,
+    NotificationGroupManagedError,
     NotificationGroupPolicy,
     NotificationGroupView,
     NotificationPolicyPatch,
@@ -119,7 +120,10 @@ def _patch_preferences(
     if policy.managed:
         raise HTTPException(409, _MANAGED)
     change = SwitchChange(scene=body.scene, channel=body.channel, enabled=body.enabled)
-    switches = ctx.port_call(lambda: port.save_preference(user.id, group.key, change))
+    try:
+        switches = ctx.port_call(lambda: port.save_preference(user.id, group.key, change))
+    except NotificationGroupManagedError as exc:
+        raise HTTPException(409, _MANAGED) from exc
     return build_group_view(group, policy, switches, mode="my")
 
 

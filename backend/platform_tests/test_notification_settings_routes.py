@@ -49,6 +49,21 @@ def test_patch_preferences_conflict_when_managed() -> None:
     assert response.json()["detail"] == {"code": "notification_group_managed"}
 
 
+def test_patch_preferences_conflict_when_managed_between_check_and_save() -> None:
+    settings = MemoryNotificationSettings()
+    settings.policies["learner"] = NotificationGroupPolicy(managed=False)
+
+    def flip_to_managed() -> None:
+        settings.policies["learner"] = NotificationGroupPolicy(managed=True)
+
+    settings.before_save_preference = flip_to_managed
+    client = make_settings_client(user=settings_user(LEARNER_GATE), settings=settings)
+    response = client.patch(f"{PREFIX}/preferences", json=preference_body(enabled=False))
+    assert response.status_code == 409
+    assert response.json()["detail"] == {"code": "notification_group_managed"}
+    assert ("user-1", "learner") not in settings.preferences
+
+
 def test_patch_preferences_forbidden_without_gate() -> None:
     settings = MemoryNotificationSettings()
     settings.policies["learner"] = NotificationGroupPolicy(managed=False)

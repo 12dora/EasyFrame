@@ -97,7 +97,13 @@ class NotificationSettingsPort(Protocol):
     def load_policies(self) -> dict[str, NotificationGroupPolicy]: ...
     def save_policy(self, group_key: str, change: PolicyChange, *, actor_id: str) -> NotificationGroupPolicy: ...
     def load_preferences(self, account_ids: Sequence[str], group_key: str) -> dict[str, Switches]: ...
-    def save_preference(self, account_id: str, group_key: str, change: SwitchChange) -> Switches: ...
+    def save_preference(self, account_id: str, group_key: str, change: SwitchChange) -> Switches:
+        """同一事务内先锁分组策略行(缺行先插入,与 save_policy 同一行锁)。
+
+        托管则抛 NotificationGroupManagedError,否则再锁并写偏好行。
+        """
+        ...
+
     def channel_available(self, channel: str) -> bool: ...
 
 
@@ -107,6 +113,14 @@ class UnknownNotificationTargetError(ValueError):
     def __init__(self, kind: str) -> None:
         super().__init__(kind)
         self.kind = kind
+
+
+class NotificationGroupManagedError(Exception):
+    """分组处于平台托管,个人偏好只读。"""
+
+    def __init__(self, group_key: str) -> None:
+        super().__init__(group_key)
+        self.group_key = group_key
 
 
 class NotificationChannelStatus(PlatformModel):

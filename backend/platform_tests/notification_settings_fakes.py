@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -14,6 +14,7 @@ from enterprise_platform.notification_settings import (
     LocalizedText,
     NotificationCatalog,
     NotificationGroup,
+    NotificationGroupManagedError,
     NotificationGroupPolicy,
     NotificationScene,
     PolicyChange,
@@ -89,6 +90,7 @@ class MemoryNotificationSettings:
         self.unavailable: set[str] = set()
         self.policy_loads = 0
         self.preference_loads: list[tuple[tuple[str, ...], str]] = []
+        self.before_save_preference: Callable[[], None] | None = None
 
     def load_policies(self) -> dict[str, NotificationGroupPolicy]:
         self.policy_loads += 1
@@ -116,6 +118,11 @@ class MemoryNotificationSettings:
         return loaded
 
     def save_preference(self, account_id: str, group_key: str, change: SwitchChange) -> Switches:
+        if self.before_save_preference is not None:
+            self.before_save_preference()
+        policy = self.policies.setdefault(group_key, NotificationGroupPolicy())
+        if policy.managed:
+            raise NotificationGroupManagedError(group_key)
         key = (account_id, group_key)
         updated = _apply_switch(copy_switches(self.preferences.get(key, {})), change)
         self.preferences[key] = updated
