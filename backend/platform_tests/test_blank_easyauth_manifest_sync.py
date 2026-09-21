@@ -211,11 +211,24 @@ def test_schedule_runs_outside_test_runtime(monkeypatch: pytest.MonkeyPatch) -> 
         called.append(bool(kwargs.get("force")))
         done.set()
 
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setenv("BLANK_RUNTIME_ENV", "production")
     monkeypatch.setattr("blank_app.easyauth_manifest_sync.sync_blank_manifest", fake)
     schedule_blank_manifest_sync(force=True)
     assert done.wait(timeout=2)
     assert called == [True]
+
+
+def test_schedule_skipped_under_pytest_even_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[bool] = []
+    monkeypatch.setenv("BLANK_RUNTIME_ENV", "production")
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "platform_tests/test_blank_easyauth_manifest_sync.py::schedule")
+    monkeypatch.setattr(
+        "blank_app.easyauth_manifest_sync.sync_blank_manifest",
+        lambda **kwargs: called.append(bool(kwargs.get("force"))),
+    )
+    schedule_blank_manifest_sync(force=True)
+    assert called == []
 
 
 def test_save_easyauth_settings_forces_manifest_sync(monkeypatch: pytest.MonkeyPatch) -> None:

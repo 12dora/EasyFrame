@@ -2,7 +2,8 @@
 
 状态在 ``platform_settings.easyauth_manifest_sync``。凭据来自 ``easyauth`` 行,
 解密方式与权限客户端相同;对外基址来自 ``oidc.frontend_base_url``(非 https 由推送器省略)。
-启动时调度一次;保存 EasyAuth 设置后强制再推。``BLANK_RUNTIME_ENV=test`` 时不启动线程。
+启动时调度一次;保存 EasyAuth 设置后强制再推。
+``BLANK_RUNTIME_ENV=test`` 或 pytest 进程里不启动线程。
 """
 
 from __future__ import annotations
@@ -80,11 +81,17 @@ def sync_blank_manifest(
 
 
 def schedule_blank_manifest_sync(*, force: bool = False) -> None:
-    """后台推送。测试运行时不启动线程。"""
+    """后台推送。测试进程或 ``BLANK_RUNTIME_ENV=test`` 时不启动线程。"""
 
-    if os.getenv("BLANK_RUNTIME_ENV", "production").strip().lower() == "test":
+    if _scheduler_disabled():
         return
     _SCHEDULER.schedule(force)
+
+
+def _scheduler_disabled() -> bool:
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    return os.getenv("BLANK_RUNTIME_ENV", "production").strip().lower() == "test"
 
 
 def _run_scheduled(force: bool) -> None:

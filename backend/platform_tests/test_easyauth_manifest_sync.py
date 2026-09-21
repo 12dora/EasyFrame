@@ -205,28 +205,32 @@ def test_unchanged_content_reuses_stored_version_when_forced() -> None:
     assert manifest["schema_version"] == 1
 
 
-def test_409_retries_once_with_downstream_version() -> None:
+def test_409_probes_reported_version_before_any_bump() -> None:
     store = _MemoryStore()
     bodies, _, transport = _play([_conflict(9), _accepted()])
     result = sync_manifest(target=_target(), manifest=_manifest(), store=store, transport=transport)
-    assert [body["manifest"]["schema_version"] for body in bodies] == [1, 10]
+    assert [body["manifest"]["schema_version"] for body in bodies] == [1, 9]
     assert result.pushed is True
-    assert result.schema_version == 10
+    assert result.schema_version == 9
+    assert result.template_version == 3
     assert store.state is not None
-    assert store.state["schema_version"] == 10
+    assert store.state["schema_version"] == 9
     assert store.state["status"] == "ok"
+    assert store.state["template_version"] == 3
 
 
 def test_409_without_version_retries_only_once() -> None:
     store = _MemoryStore()
-    bodies, _, transport = _play([_error(409), _error(409)])
-    result = sync_manifest(target=_target(), manifest=_manifest(), store=store, transport=transport)
+    bodies, _, transport = _play([_error(409), _error(409), _error(409), _error(409)])
+    first = sync_manifest(target=_target(), manifest=_manifest(), store=store, transport=transport)
     assert [body["manifest"]["schema_version"] for body in bodies] == [1, 2]
-    assert result.pushed is False
-    assert result.status == "failed"
-    assert store.state is not None
-    assert store.state["status"] == "failed"
-    assert store.state["schema_version"] == 2
+    assert first.pushed is False
+    assert first.status == "failed"
+    assert first.schema_version == 2
+    assert store.state is None
+    sync_manifest(target=_target(), manifest=_manifest(), store=store, transport=transport)
+    assert [body["manifest"]["schema_version"] for body in bodies] == [1, 2, 1, 2]
+    assert store.state is None
 
 
 @pytest.mark.parametrize("status", [401, 403, 429, 500])
@@ -282,10 +286,11 @@ def test_422_retries_without_base_url() -> None:
 
 def test_422_without_base_url_is_failed() -> None:
     store = _MemoryStore()
-    bodies, _, transport = _play([_error(422)])
+    bodies, _, transport = _play([_error(422), _accepted()])
+    manifest = _manifest()
     result = sync_manifest(
         target=_target(public_base_url="http://blank.example.test"),
-        manifest=_manifest(),
+        manifest=manifest,
         store=store,
         transport=transport,
     )
@@ -294,6 +299,14 @@ def test_422_without_base_url_is_failed() -> None:
     assert result.status == "failed"
     assert store.state is not None
     assert store.state["status"] == "failed"
+    assert store.state["http_status"] == 422
+    assert "schema_version" not in store.state
+    skipped = sync_manifest(target=_target(), manifest=manifest, store=store, transport=transport)
+    assert skipped.skipped is True
+    assert len(bodies) == 1
+    forced = sync_manifest(target=_target(), manifest=manifest, store=store, force=True, transport=transport)
+    assert forced.pushed is True
+    assert [body["manifest"]["schema_version"] for body in bodies] == [1, 1]
 
 
 def test_non_https_public_base_url_is_omitted() -> None:
@@ -339,21 +352,20 @@ def test_force_bypasses_skip() -> None:
     assert bodies[1]["manifest"]["schema_version"] == 1
 
 
-def test_other_4xx_is_retried_and_later_success_overwrites() -> None:
+def test_other_4xx_is_not_stored_and_later_success_overwrites() -> None:
     store = _MemoryStore()
     manifest = _manifest()
     bodies, _, transport = _play([_error(400), _accepted()])
     first = sync_manifest(target=_target(), manifest=manifest, store=store, transport=transport)
     assert first.status == "failed"
-    assert store.state is not None
-    failed = dict(store.state)
-    assert failed["status"] == "failed"
-    assert failed["content_hash"] == manifest_content_hash(manifest)
-    assert "template_version" not in failed
+    assert store.state is None
     second = sync_manifest(target=_target(), manifest=manifest, store=store, transport=transport)
     assert second.pushed is True
     assert len(bodies) == 2
+    assert [body["manifest"]["schema_version"] for body in bodies] == [1, 1]
+    assert store.state is not None
     assert store.state["status"] == "ok"
+    assert store.state["schema_version"] == 1
     assert store.state["template_version"] == 3
     assert store.state["catalog_version"] == 4
 

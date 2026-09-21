@@ -1,5 +1,7 @@
 """platform_tests 共享前置。"""
 
+import os
+
 import pytest
 
 
@@ -18,9 +20,17 @@ def blank_admin_seeded() -> None:
     需要 blank 宿主的模块用 ``pytestmark = pytest.mark.usefixtures(...)`` 整模块声明。
     """
 
-    from fastapi.testclient import TestClient
+    previous = os.environ.get("BLANK_RUNTIME_ENV")
+    os.environ["BLANK_RUNTIME_ENV"] = "test"
+    try:
+        from fastapi.testclient import TestClient
 
-    from blank_app.main import app
+        from blank_app.main import app
 
-    with TestClient(app):
-        pass
+        with TestClient(app):
+            pass
+    finally:
+        if previous is None:
+            os.environ.pop("BLANK_RUNTIME_ENV", None)
+        else:
+            os.environ["BLANK_RUNTIME_ENV"] = previous
