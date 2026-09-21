@@ -212,6 +212,25 @@ describe("notificationSettingsAdapter", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it("maps the DingTalk channel methods onto /channels/dingtalk", async () => {
+    const channel = { baseUrl: "", appKey: "", baseUrlInherited: false, appKeyInherited: false, hasCredential: false, credentialSource: "none", configured: false, updatedAt: null };
+    const fetchMock = respondWith(channel);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await notificationSettingsAdapter.loadDingtalkChannel?.();
+    await notificationSettingsAdapter.saveDingtalkChannel?.({ baseUrl: "https://auth.example.com", credential: "" });
+    await notificationSettingsAdapter.testDingtalkChannel?.();
+
+    const calls = fetchMock.mock.calls as unknown as FetchCall[];
+    expect(calls.map(([, init]) => init?.method ?? "GET")).toEqual(["GET", "PUT", "POST"]);
+    expect(String(calls[0][0])).toContain("/api/v1/notification-settings/channels/dingtalk");
+    expect(calls[0][1]?.cache).toBe("no-store");
+    expect(String(calls[1][0])).toContain("/api/v1/notification-settings/channels/dingtalk");
+    // 只送改动过的键:`""` 是「清除」,必须原样过线。
+    expect(JSON.parse(String(calls[1][1]?.body))).toEqual({ baseUrl: "https://auth.example.com", credential: "" });
+    expect(String(calls[2][0])).toContain("/api/v1/notification-settings/channels/dingtalk/test");
+  });
+
   it("rejects a managed 409 in the shape the shared surface recognises", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: { code: "notification_group_managed" } }), { status: 409, headers: { "content-type": "application/json" } })));
 

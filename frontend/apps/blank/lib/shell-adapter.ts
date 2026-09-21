@@ -2,10 +2,13 @@
 
 import {
   resolveEnterpriseIdentityLabel,
+  type DingtalkChannelSettings,
+  type DingtalkChannelSettingsUpdate,
   type EnterpriseGeneralSettingsAdapter,
   type EnterpriseGeneralSettingsValue,
   type EnterpriseIdentityKind,
   type EnterpriseIdentityLabels,
+  type NotificationChannelTestResult,
   type NotificationGroupView,
   type NotificationPolicyChange,
   type NotificationPolicyView,
@@ -241,10 +244,13 @@ export function saveGeneralSettings(value: ShellGeneralSettings) { return platfo
  */
 export const generalSettingsAdapter: EnterpriseGeneralSettingsAdapter = { load: loadGeneralSettings, save: saveGeneralSettings };
 
+/** 「通知渠道」页签的钉钉配置端点。 */
+const DINGTALK_CHANNEL_PATH = "/api/v1/notification-settings/channels/dingtalk";
+
 /**
  * 「设置 → 通知」的传输口(契约见 `packages/easy-enterprise/docs/NOTIFICATION-SETTINGS.md`)。
  *
- * 四个方法一一对应 `/api/v1/notification-settings` 的四个端点,走的是与
+ * 前四个方法一一对应 `/api/v1/notification-settings` 的四个端点,走的是与
  * `generalSettingsAdapter` 同一条 `platformRequest`(credentials、Bearer、401 口径都一样)。
  *
  * 两个 `save*` 直接把响应体交回去:后端返回的是**更新后的整个分组**,页面拿它替换乐观值。
@@ -253,7 +259,10 @@ export const generalSettingsAdapter: EnterpriseGeneralSettingsAdapter = { load: 
  * 正好命中共享包的 `isNotificationManagedConflict`(它只认 `status === 409` 或
  * `code === "notification_group_managed"`,不 `instanceof` 具体错误类),页面据此回滚并重读。
  *
- * 两个读都带 `cache: "no-store"`,为的是**退出在途 GET 合并**(`sharedGetKey` 只合并「除
+ * 「通知渠道」的三个方法对应 `/channels/dingtalk`(GET / PUT / POST `test`):保存只带改动过的
+ * 字段,凭据只写不回显;测试连接由后端探测 EasyAuth 通知接口,不发送钉钉消息。
+ *
+ * 所有读都带 `cache: "no-store"`,为的是**退出在途 GET 合并**(`sharedGetKey` 只合并「除
  * `method` 外没有任何 fetch 选项」的纯 GET,多一个键就不合并了)。这一页的重读全是
  * 「刚写完,再读一遍」:切页签要重拉,PATCH 撞上 409 之后更要重拉——而 409 恰恰意味着
  * 分组在这段时间里被改成了托管。若这次恢复性重读并到了冲突**之前**就已在途的那一个 GET 上,
@@ -267,4 +276,8 @@ export const notificationSettingsAdapter: NotificationSettingsAdapter = {
   loadPolicy: () => platformRequest<NotificationPolicyView>("/api/v1/notification-settings/policy", { cache: "no-store" }),
   savePolicy: (change: NotificationPolicyChange) =>
     platformRequest<NotificationGroupView>("/api/v1/notification-settings/policy", { method: "PATCH", body: JSON.stringify(change) }),
+  loadDingtalkChannel: () => platformRequest<DingtalkChannelSettings>(DINGTALK_CHANNEL_PATH, { cache: "no-store" }),
+  saveDingtalkChannel: (patch: DingtalkChannelSettingsUpdate) =>
+    platformRequest<DingtalkChannelSettings>(DINGTALK_CHANNEL_PATH, { method: "PUT", body: JSON.stringify(patch) }),
+  testDingtalkChannel: () => platformRequest<NotificationChannelTestResult>(`${DINGTALK_CHANNEL_PATH}/test`, { method: "POST" }),
 };
