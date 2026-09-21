@@ -36,7 +36,7 @@ def test_plan_delivery_batches_preference_loads_when_unmanaged() -> None:
     assert settings.policy_loads == 1
     assert settings.preference_loads == [(("a1", "a2"), "learner")]
     assert [item.ref for item in plan.in_app] == ["r1", "r2"]
-    assert [item.ref for item in plan.dingtalk] == ["r1", "r2", "r3", "r4"]
+    assert [item.ref for item in plan.dingtalk] == ["r1", "r2", "r3"]
 
 
 def test_plan_delivery_skips_preferences_when_managed() -> None:
@@ -76,7 +76,7 @@ def test_plan_delivery_dedupes_in_app_by_account_id_preserving_order() -> None:
     plan = plan_delivery(sample_catalog(), settings, SCENE_RESULT, recipients)
     assert [item.ref for item in plan.in_app] == ["r1", "r2", "r4"]
     assert [item.account_id for item in plan.in_app] == ["a1", "a2", "a3"]
-    assert [item.ref for item in plan.dingtalk] == ["r1", "r2", "r3", "r4"]
+    assert [item.ref for item in plan.dingtalk] == ["r1", "r2", "r4"]
 
 
 def test_plan_delivery_dedupes_dingtalk_by_ref_preserving_order() -> None:
@@ -90,4 +90,29 @@ def test_plan_delivery_dedupes_dingtalk_by_ref_preserving_order() -> None:
     )
     plan = plan_delivery(sample_catalog(), settings, SCENE_RESULT, recipients)
     assert [item.ref for item in plan.dingtalk] == ["r1", "r2", "r3"]
-    assert [item.account_id for item in plan.in_app] == ["a1", "a2", "a3", "a4"]
+    assert [item.account_id for item in plan.in_app] == ["a1", "a3"]
+
+
+def test_plan_delivery_duplicate_ref_conflicting_preferences_keep_first() -> None:
+    settings = MemoryNotificationSettings()
+    settings.policies["learner"] = NotificationGroupPolicy(managed=False)
+    settings.preferences[("a1", "learner")] = {SCENE_RESULT: {CHANNEL_IN_APP: True, CHANNEL_DINGTALK: False}}
+    recipients = (
+        NotificationRecipient(ref="r1", account_id="a1"),
+        NotificationRecipient(ref="r1", account_id=None),
+    )
+    plan = plan_delivery(sample_catalog(), settings, SCENE_RESULT, recipients)
+    assert [item.ref for item in plan.in_app] == ["r1"]
+    assert plan.dingtalk == ()
+
+
+def test_plan_delivery_duplicate_account_id_keeps_first_occurrence() -> None:
+    settings = MemoryNotificationSettings()
+    settings.policies["learner"] = NotificationGroupPolicy(managed=False)
+    recipients = (
+        NotificationRecipient(ref="r1", account_id="a1"),
+        NotificationRecipient(ref="r2", account_id="a1"),
+    )
+    plan = plan_delivery(sample_catalog(), settings, SCENE_RESULT, recipients)
+    assert [item.ref for item in plan.in_app] == ["r1"]
+    assert [item.ref for item in plan.dingtalk] == ["r1"]

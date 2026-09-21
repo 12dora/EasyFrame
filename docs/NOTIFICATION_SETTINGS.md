@@ -133,7 +133,7 @@ def plan_delivery(catalog, settings: NotificationSettingsPort, scene_key: str,
                   recipients: Sequence[NotificationRecipient]) -> DeliveryPlan
 ```
 
-渠道输出按出现顺序去重:站内通知(`in_app`)按 `account_id`,钉钉(`dingtalk`)按 `ref`;同一身份只保留第一次。未声明的 `scene_key` 抛 `UnknownNotificationSceneError`(编程错误,不静默吞)。宿主拿到计划后:站内通知与业务写入同事务;钉钉一律在事务 / advisory lock 之外发送,失败不回滚业务。
+先对原始收件人列表按出现顺序去重(一次扫描:若 `ref` 已出现,或其非空 `account_id` 已出现,则视为重复,只保留第一次),再在去重后的列表上判定各渠道。未声明的 `scene_key` 抛 `UnknownNotificationSceneError`(编程错误,不静默吞)。宿主拿到计划后:站内通知与业务写入同事务;钉钉一律在事务 / advisory lock 之外发送,失败不回滚业务。
 
 ## 6. 前端(EasyUI)
 

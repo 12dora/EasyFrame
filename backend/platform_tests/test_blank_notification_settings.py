@@ -42,6 +42,18 @@ def _clean_notification_rows(request):
     _wipe_rows()
 
 
+@pytest.fixture
+def _unconfigured_easyauth():
+    from blank_app.adapter_support import _get_setting, _save_setting
+
+    previous = _get_setting("easyauth")
+    try:
+        _save_setting("easyauth", {}, actor_id="test-actor", action="authz.settings.update")
+        yield
+    finally:
+        _save_setting("easyauth", previous, actor_id="test-actor", action="authz.settings.update")
+
+
 def test_model_metadata_matches_notification_settings_schema() -> None:
     policy = PlatformNotificationPolicy.__table__
     assert list(policy.primary_key.columns.keys()) == ["group_key"]
@@ -80,6 +92,7 @@ def test_notification_settings_upgrade_and_downgrade() -> None:
         engine.dispose()
 
 
+@pytest.mark.usefixtures("_unconfigured_easyauth")
 def test_defaults_with_no_rows() -> None:
     from blank_app.main import app
 

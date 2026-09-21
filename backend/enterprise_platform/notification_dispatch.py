@@ -49,11 +49,12 @@ def plan_delivery(
         raise UnknownNotificationSceneError(scene_key)
     group, scene = located
     policy = settings.load_policies().get(group.key, NotificationGroupPolicy())
-    prefs = _load_plan_preferences(settings, policy, group.key, recipients)
+    unique = _dedupe_recipients(recipients)
+    prefs = _load_plan_preferences(settings, policy, group.key, unique)
     return DeliveryPlan(
         scene_key=scene_key,
-        in_app=_planned(scene, CHANNEL_IN_APP, policy, prefs, recipients, require_account=True),
-        dingtalk=_planned(scene, CHANNEL_DINGTALK, policy, prefs, recipients, require_account=False),
+        in_app=_planned(scene, CHANNEL_IN_APP, policy, prefs, unique, require_account=True),
+        dingtalk=_planned(scene, CHANNEL_DINGTALK, policy, prefs, unique, require_account=False),
     )
 
 
@@ -82,13 +83,19 @@ def _unique_account_ids(recipients: Sequence[NotificationRecipient]) -> list[str
     return ids
 
 
-def _dedupe_channel(recipients: Sequence[NotificationRecipient], channel: str) -> tuple[NotificationRecipient, ...]:
-    unique: dict[str, NotificationRecipient] = {}
+def _dedupe_recipients(recipients: Sequence[NotificationRecipient]) -> tuple[NotificationRecipient, ...]:
+    unique: list[NotificationRecipient] = []
+    seen_refs: set[str] = set()
+    seen_accounts: set[str] = set()
     for recipient in recipients:
-        identity = recipient.account_id if channel == CHANNEL_IN_APP else recipient.ref
-        if identity is not None and identity not in unique:
-            unique[identity] = recipient
-    return tuple(unique.values())
+        account_id = recipient.account_id
+        if recipient.ref in seen_refs or (account_id is not None and account_id in seen_accounts):
+            continue
+        seen_refs.add(recipient.ref)
+        if account_id is not None:
+            seen_accounts.add(account_id)
+        unique.append(recipient)
+    return tuple(unique)
 
 
 def _planned(
@@ -102,12 +109,11 @@ def _planned(
 ) -> tuple[NotificationRecipient, ...]:
     if channel not in scene.channels:
         return ()
-    selected = [
+    return tuple(
         recipient
         for recipient in recipients
         if _recipient_enabled(scene, channel, policy, prefs, recipient, require_account=require_account)
-    ]
-    return _dedupe_channel(selected, channel)
+    )
 
 
 def _recipient_enabled(
