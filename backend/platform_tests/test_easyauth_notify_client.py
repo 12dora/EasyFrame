@@ -43,11 +43,9 @@ def _client(handler) -> NotifyClient:
 def _request() -> NotifyRequest:
     return NotifyRequest(
         recipients=(USER_REF,),
-        template="action_card",
         content="### 任务已逾期",
         title="任务逾期升级",
         deeplink_url="https://app.example/tasks/123",
-        deeplink_title="查看任务",
         dedup_key="overdue-escalate:123:2026-07-16",
         biz_tag="overdue_escalation",
     )
@@ -79,13 +77,54 @@ def test_send_maps_202_as_new_acceptance() -> None:
     result = _client(handler).send(_request())
     assert captured["authorization"] == f"Bearer {TOKEN}"
     assert captured["path"] == f"/api/v1/apps/{APP_KEY}/notify/messages"
-    assert captured["body"]["recipients"] == [USER_REF]
-    assert captured["body"]["dedup_key"] == "overdue-escalate:123:2026-07-16"
+    assert captured["body"] == {
+        "recipients": [USER_REF],
+        "content": "### 任务已逾期",
+        "template": "oa",
+        "title": "任务逾期升级",
+        "deeplink_url": "https://app.example/tasks/123",
+        "dedup_key": "overdue-escalate:123:2026-07-16",
+        "biz_tag": "overdue_escalation",
+    }
     assert result.message_id == MESSAGE_ID
     assert result.accepted is True
     assert result.status == "pending"
     assert result.recipient_total == 1
     assert result.recipient_rejected == 0
+
+
+def test_send_serializes_app_display_name_and_author_only_when_set() -> None:
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content.decode()))
+        return httpx.Response(202, json=_accepted_payload(accepted=True))
+
+    client = _client(handler)
+    client.send(_request())
+    client.send(
+        NotifyRequest(
+            recipients=(USER_REF,),
+            content="考试即将开始",
+            title="考试开考",
+            app_display_name="学习工作台",
+            author="教务处",
+        )
+    )
+
+    omitted, present = captured
+    assert omitted["template"] == "oa"
+    assert "deeplink_title" not in omitted
+    assert "app_display_name" not in omitted
+    assert "author" not in omitted
+    assert present == {
+        "recipients": [USER_REF],
+        "content": "考试即将开始",
+        "template": "oa",
+        "title": "考试开考",
+        "app_display_name": "学习工作台",
+        "author": "教务处",
+    }
 
 
 def test_send_maps_200_duplicate_as_idempotent_replay() -> None:

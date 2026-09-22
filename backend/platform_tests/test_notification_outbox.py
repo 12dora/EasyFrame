@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -785,6 +786,9 @@ def test_notify_client_satisfies_sender() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/api/v1/apps/easytrade/notify/messages"
+        body = json.loads(request.content)
+        assert body["template"] == "oa"
+        assert not {"deeplink_title", "app_display_name", "author"} & body.keys()
         return httpx.Response(
             202,
             json={
@@ -796,12 +800,7 @@ def test_notify_client_satisfies_sender() -> None:
             },
         )
 
-    payload = NotifyRequest(
-        recipients=("dt:v1:demo",),
-        template="text",
-        content="hello",
-        dedup_key="dedup-1",
-    )
+    payload = NotifyRequest(recipients=("dt:v1:demo",), content="hello", dedup_key="dedup-1")
     port = InMemoryOutbox()
     port.put(
         OutboxItem(

@@ -31,14 +31,17 @@ _PERMANENT_STATUSES = frozenset({401, 403, 422})
 
 @dataclass(frozen=True)
 class NotifyRequest:
+    """钉钉 OA 工作通知。``template`` 始终写入请求体;其余可选字段为 None 时省略。"""
+
     recipients: tuple[str, ...]
-    template: str
     content: str
     title: str | None = None
+    template: str = "oa"
     deeplink_url: str | None = None
-    deeplink_title: str | None = None
     dedup_key: str | None = None
     biz_tag: str | None = None
+    app_display_name: str | None = None
+    author: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,19 +103,21 @@ class NotifyClient:
 def _notify_body(request: NotifyRequest) -> dict[str, Any]:
     body: dict[str, Any] = {
         "recipients": list(request.recipients),
-        "template": request.template,
         "content": request.content,
+        "template": request.template,
     }
     if request.title is not None:
         body["title"] = request.title
     if request.deeplink_url is not None:
         body["deeplink_url"] = request.deeplink_url
-    if request.deeplink_title is not None:
-        body["deeplink_title"] = request.deeplink_title
     if request.dedup_key is not None:
         body["dedup_key"] = request.dedup_key
     if request.biz_tag is not None:
         body["biz_tag"] = request.biz_tag
+    if request.app_display_name is not None:
+        body["app_display_name"] = request.app_display_name
+    if request.author is not None:
+        body["author"] = request.author
     return body
 
 
